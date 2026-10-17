@@ -16,7 +16,9 @@ class ConnectionAssessment(BaseModel):
     strength: float = Field(ge=0, le=1)
     title: str = Field(min_length=3, max_length=120)
     explanation: str = Field(min_length=20, max_length=1600)
-    shared_concept: str = Field(min_length=2, max_length=200)
+    shared_concept: str = Field(default="", max_length=200)
+    evidence_a: str = Field(default="", max_length=400)
+    evidence_b: str = Field(default="", max_length=400)
 
 
 class TopicSummary(BaseModel):
@@ -55,13 +57,22 @@ class GeminiClient:
         return self._client
 
     def assess_connection(self, text_a: str, text_b: str) -> ConnectionAssessment:
-        prompt = f"""Assess whether these two cited passages express a specific, useful connection.
-Only use information explicitly present in the passages. Do not invent facts, evidence, or quotations.
-If no meaningful connection exists, set relevant=false, strength=0 and explain briefly.
-Return only a JSON object with keys relevant (boolean), strength (number 0..1), title,
-explanation, shared_concept. Explain how each passage supports the connection.
+        prompt = f"""Compare these two source passages and assess how strongly their ideas are related.
+Use the source context to interpret terminology, but base every claim on the supplied passage text.
+Do not infer a connection from shared generic words alone. Do not invent facts or quotations.
+Score strength on this calibrated 0..1 scale:
+0.00-0.19: no meaningful relation;
+0.20-0.39: only broad vocabulary or a weak analogy;
+0.40-0.49: a weak or speculative relation;
+0.50-0.79: a specific, evidence-backed shared concept or mechanism;
+0.80-1.00: a direct, substantial relation supported by both passages.
+Set relevant=true only for strength >= 0.50. Otherwise set relevant=false and strength=0.
+Return one JSON object with keys relevant (boolean), strength (number 0..1), title,
+explanation, shared_concept, evidence_a, evidence_b. Give a concise explanation of the
+similarity and the meaningful differences. evidence_a and evidence_b must be short exact
+quotes copied from the respective passages, or empty strings if there is no connection.
 
-PASSAGE A:\n{text_a}\n\nPASSAGE B:\n{text_b}"""
+SOURCE A:\n{text_a}\n\nSOURCE B:\n{text_b}"""
         try:
             response = self._get_client().models.generate_content(
                 model=self.model,
@@ -71,7 +82,7 @@ PASSAGE A:\n{text_a}\n\nPASSAGE B:\n{text_b}"""
             raw = response.text
             if not raw:
                 raise ValueError("empty model response")
-            parsed = ConnectionAssessment.model_validate(json.loads(raw))
+            parsed = ConnectionAssessment.model_validate(_single_json_object(json.loads(raw)))
             if not parsed.relevant:
                 return parsed.model_copy(update={"strength": 0.0})
             return parsed
@@ -166,12 +177,12 @@ SOURCE TEXT:
             )
             if not response.text:
                 raise ValueError("empty model response")
-            return DocumentAnalysis.model_validate(json.loads(response.text))
+            payload = _single_json_object(json.loads(response.text))
+            return DocumentAnalysis.model_validate(payload)
         except (ValidationError, json.JSONDecodeError, ValueError) as exc:
             raise GeminiClientError(f"Gemini returned invalid document analysis: {exc}") from exc
         except Exception as exc:
             raise GeminiClientError(f"Gemini document analysis request failed: {exc}") from exc
-
     def assess_url_connection(self, url_a: str, url_b: str, *, max_chars_per_page: int = 12000
                               ) -> ConnectionAssessment:
         """Fetch two public pages and assess their extracted text with source URLs attached."""
@@ -187,3 +198,11 @@ SOURCE TEXT:
         source_a = (f"Source URL: {page_a.url}\nPage title: {page_a.title}\n\n" + page_a.text[:max_chars_per_page])
         source_b = (f"Source URL: {page_b.url}\nPage title: {page_b.title}\n\n" + page_b.text[:max_chars_per_page])
         return self.assess_connection(source_a, source_b)
+
+
+def _single_json_object(payload: object) -> dict:
+    if isinstance(payload, list) and len(payload) == 1:
+        payload = payload[0]
+    if not isinstance(payload, dict):
+        raise ValueError("model response must be one JSON object")
+    return payload

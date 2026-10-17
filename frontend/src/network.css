@@ -52,7 +52,7 @@ body.network-mode #root { min-height: 100vh; }
 .network-zoom-controls button { width: 34px; height: 31px; border: 0; border-right: 1px solid #46666d66; color: #fffedb; background: transparent; font: 15px 'DM Mono', monospace; }
 .network-zoom-controls button:last-child { border-right: 0; font-size: 14px; }
 .network-zoom-controls button:hover { color: #46666d; background: #fffedb0a; }
-.add-source-button { position: absolute; z-index: 9; left: 50%; bottom: 23px; transform: translateX(-50%); display: flex; align-items: center; gap: 9px; height: 43px; padding: 0 20px; border: 1px solid #fffedb; border-radius: 3px; color: #fffedb; background: #000; font: 10px 'DM Mono', monospace; letter-spacing: .1em; box-shadow: 0 0 24px #000; }
+.add-source-button { position: absolute; z-index: 9; right: 26px; bottom: 65px; display: flex; align-items: center; gap: 9px; height: 43px; padding: 0 20px; border: 1px solid #fffedb; border-radius: 3px; color: #fffedb; background: #000; font: 10px 'DM Mono', monospace; letter-spacing: .1em; box-shadow: 0 0 24px #000; }
 .add-source-button span { font-size: 17px; }
 .add-source-button:hover { color: #000; background: #fffedb; }
 .inspector { position: absolute; z-index: 8; top: 66px; right: 0; bottom: 0; width: min(370px, 90vw); overflow-y: auto; border-left: 1px solid #46666d66; background: rgba(0,0,0,.96); transform: translateX(102%); transition: transform .26s ease; }
@@ -132,7 +132,7 @@ body.network-mode #root { min-height: 100vh; }
   .network-notice { top: 139px; left: 17px; max-width: 72vw; font-size: 8px; }
   .network-legend { left: 12px; bottom: 77px; flex-direction: column; gap: 7px; padding: 8px; font-size: 7px; }
   .network-zoom-controls { right: 11px; bottom: 70px; }
-  .add-source-button { bottom: 13px; height: 40px; }
+  .add-source-button { right: 11px; bottom: 121px; height: 40px; }
   .inspector { top: 58px; width: min(350px, 94vw); }
 }
 
@@ -244,8 +244,10 @@ body.network-dark-mode .label-domain { fill: #e8ece8; opacity: .24; }
 body.network-dark-mode .topic-outer-ring { fill: none; stroke: #e8ece8; }
 body.network-dark-mode .topic-hub, body.network-dark-mode .document-node,
 body.network-dark-mode .chunk-node { fill: #fffedb; fill-opacity: 1; stroke: #fffedb; }
+body.network-dark-mode .domain-hub { fill: #fffedb; stroke: #fffedb; }
+body.network-dark-mode .domain-inner-ring { stroke: #fffedb; }
 body.network-dark-mode .domain-halo { fill: #46666d; fill-opacity: .18; stroke: #e8ece8; stroke-opacity: .5; }
-body.network-dark-mode [data-link-kind="local"] path { stroke: #b69b5b; }
+body.network-dark-mode .local-line { border-color: #fffedb; }
 body.network-dark-mode .planetary-rings circle { stroke: #e8ece8; stroke-opacity: .24; }
 body.network-dark-mode .network-link-score { stroke: #102a20; }
 body.network-dark-mode .network-legend, body.network-dark-mode .network-zoom-controls,

@@ -41,6 +41,12 @@ export default function App() {
   useEffect(() => { void refreshGraph(); }, [refreshGraph]);
 
   useEffect(() => {
+    if (backendState !== "demo") return;
+    const retry = window.setInterval(() => { void refreshGraph(); }, 3000);
+    return () => window.clearInterval(retry);
+  }, [backendState, refreshGraph]);
+
+  useEffect(() => {
     document.body.classList.toggle("dark-mode", darkMode);
     localStorage.setItem("hauri-theme", darkMode ? "dark" : "light");
     const syncTheme = (event: StorageEvent) => {

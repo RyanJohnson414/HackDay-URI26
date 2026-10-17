@@ -20,6 +20,10 @@ export default function DiscoveryFeed({ graph }: { graph: GraphResponse }) {
             <div className="discovery-copy">
               <strong>{connection.title || connection.shared_concept}</strong>
               <p>{connection.explanation}</p>
+              <div className="discovery-classification">
+                <span>{connection.discipline_scope.replaceAll("_", " ")}</span>
+                <span>{connection.semantic_distance} semantic link</span>
+              </div>
               <div className="discovery-sources">
                 <span>{left ? documents.get(left.document_id) : "Source"}</span>
                 <b>↔</b>

@@ -32,7 +32,7 @@ def test_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def api_client(test_engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
-    monkeypatch.setattr(main_app, "seed_example_data", lambda: False)
+    monkeypatch.setattr(main_app, "load_context_sources", lambda: None)
     test_session = sessionmaker(bind=test_engine, autoflush=False, expire_on_commit=False, class_=Session)
 
     def override_get_db():

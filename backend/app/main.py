@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,15 +16,34 @@ from fastapi import FastAPI  # type: ignore[reportMissingImports]
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore[reportMissingImports]
 
 from app.api.routes import discoveries, documents, graph
-from app.db.seed import seed_example_data
 from app.db.session import init_db
+from app.services.startup_sources import load_context_sources
+
+logger = logging.getLogger(__name__)
+
+
+async def _load_context_sources_in_background() -> None:
+    try:
+        report = await asyncio.to_thread(load_context_sources)
+        logger.info(
+            "Startup context sources finished: loaded=%d already_loaded=%d failed=%d",
+            report.loaded,
+            report.already_loaded,
+            len(report.failed),
+        )
+    except Exception:
+        logger.exception("Could not load startup context sources")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
-    seed_example_data()
-    yield
+    source_task = asyncio.create_task(_load_context_sources_in_background())
+    try:
+        yield
+    finally:
+        if not source_task.done():
+            source_task.cancel()
 
 
 app = FastAPI(title="HaURI26 Knowledge Graph", version="0.1.0", lifespan=lifespan)

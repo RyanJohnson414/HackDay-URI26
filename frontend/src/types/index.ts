@@ -42,6 +42,8 @@ export interface GraphConnection {
   title: string;
   explanation: string;
   shared_concept: string;
+  discipline_scope: "within_discipline" | "cross_discipline" | "unknown";
+  semantic_distance: "local" | "related" | "distant";
 }
 
 export interface GraphTopic {

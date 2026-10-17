@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Chunk, Connection as ConnectionRow, Document
+from app.db.models import Chunk, Connection as ConnectionRow, Document, Feedback
 from app.services.chunking import TextChunk, chunk_document
 from app.services.connection_engine import ConnectionEngine
 from app.services.document_parser import DocumentParseError, ParsedDocument, ParsedPage, parse_document
@@ -123,11 +123,39 @@ class IngestionService:
             raise
 
         connection_count = 0
-        # Re-evaluate connections after storing chunks. Existing rows are upserted by
-        # unordered chunk pair, so each upload can refresh scores without duplicate edges.
+        # Compare this upload against the corpus, including nearest neighbors that
+        # fall below the embedding gate, and upsert model-confirmed edges.
         try:
             all_chunks = session.query(Chunk).order_by(Chunk.id).all()
             documents = {row.id: row for row in session.query(Document).all()}
+            current_model = embedded[0].model
+            current_dimensions = len(embedded[0].vector)
+            if any(len(item.vector) != current_dimensions or item.model != current_model for item in embedded):
+                raise ValueError("New document chunks must use one embedding model and vector dimension")
+
+            stale_chunks = [
+                row for row in all_chunks
+                if row.embedding_model != current_model or len(row.embedding) != current_dimensions
+            ]
+            if stale_chunks:
+                stale_text_chunks = [
+                    TextChunk(
+                        row.id, row.document_id, documents[row.document_id].filename, row.page_number,
+                        row.text, row.start_char, row.end_char, documents[row.document_id].source_url,
+                    )
+                    for row in stale_chunks
+                ]
+                refreshed_embeddings = self.embedder.embed_chunks(stale_text_chunks)
+                if len(refreshed_embeddings) != len(stale_chunks) or any(
+                    item.model != current_model or len(item.vector) != current_dimensions
+                    for item in refreshed_embeddings
+                ):
+                    raise ValueError("Could not refresh older chunks to the active embedding model")
+                for row, item in zip(stale_chunks, refreshed_embeddings):
+                    row.embedding = list(item.vector)
+                    row.embedding_model = item.model
+                session.commit()
+
             embedded_corpus = []
             for row in all_chunks:
                 source_document = documents[row.document_id]
@@ -136,8 +164,19 @@ class IngestionService:
                     row.start_char, row.end_char, source_document.source_url,
                 )
                 embedded_corpus.append(EmbeddedChunk(text_chunk, tuple(row.embedding), row.embedding_model))
-            connections = self.connection_engine.find_connections(embedded_corpus)
+            contexts = {document.id: _document_context(document) for document in documents.values()}
+            connections = self.connection_engine.find_connections(
+                embedded_corpus,
+                # Recheck the full corpus so the broader candidate and confidence
+                # thresholds also apply to already-stored source pairs.
+                focus_document_ids=set(documents),
+                document_contexts=contexts,
+                on_candidate_error=lambda error: warnings.append(
+                    f"Connection candidate skipped: {error}"
+                ),
+            )
             current_keys = set()
+            new_document_chunk_ids = {item.chunk.id for item in embedded}
             existing = session.query(ConnectionRow).all()
             existing_by_pair = {tuple(sorted((edge.source_chunk_id, edge.target_chunk_id))): edge
                                 for edge in existing}
@@ -157,7 +196,29 @@ class IngestionService:
                 row.title = edge.title
                 row.explanation = edge.explanation
                 row.shared_concept = edge.shared_concept
-                connection_count += 1
+                row.discipline_scope = _discipline_scope(
+                    documents[edge.source.document_id].domain,
+                    documents[edge.target.document_id].domain,
+                )
+                row.semantic_distance = _semantic_distance(edge.weight)
+                if edge.source.chunk_id in new_document_chunk_ids or edge.target.chunk_id in new_document_chunk_ids:
+                    connection_count += 1
+            focused_chunk_ids = {item.chunk.id for item in embedded_corpus}
+            stale_edge_ids = [
+                edge.id for edge in existing
+                if (
+                    edge.source_chunk_id in focused_chunk_ids
+                    or edge.target_chunk_id in focused_chunk_ids
+                )
+                and tuple(sorted((edge.source_chunk_id, edge.target_chunk_id))) not in current_keys
+            ]
+            if stale_edge_ids:
+                session.query(Feedback).filter(
+                    Feedback.connection_id.in_(stale_edge_ids)
+                ).delete(synchronize_session=False)
+                session.query(ConnectionRow).filter(
+                    ConnectionRow.id.in_(stale_edge_ids)
+                ).delete(synchronize_session=False)
             session.commit()
         except Exception as exc:
             session.rollback()
@@ -184,3 +245,35 @@ class IngestionService:
             stored.status = "failed"
             stored.error = error
             session.commit()
+
+
+def _document_context(document: Document) -> str:
+    fields = [
+        f"Document title: {document.title}",
+        f"Domain: {document.domain}",
+        f"Tags: {', '.join(document.tags or [])}",
+    ]
+    sections = [
+        f"{section.get('title', '')}: {section.get('summary', '')}"
+        for section in (document.sections or [])
+        if section.get("title") or section.get("summary")
+    ]
+    if sections:
+        fields.append("Analyzed sections: " + " | ".join(sections[:10]))
+    return "\n".join(fields)
+
+
+def _discipline_scope(source_domain: str, target_domain: str) -> str:
+    source = source_domain.strip().casefold()
+    target = target_domain.strip().casefold()
+    if not source or not target or "uncategorized" in {source, target}:
+        return "unknown"
+    return "within_discipline" if source == target else "cross_discipline"
+
+
+def _semantic_distance(weight: float) -> str:
+    if weight >= 0.80:
+        return "local"
+    if weight >= 0.60:
+        return "related"
+    return "distant"

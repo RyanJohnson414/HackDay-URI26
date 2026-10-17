@@ -25,6 +25,8 @@ class GraphConnection(BaseModel):
     title: str
     explanation: str
     shared_concept: str
+    discipline_scope: str
+    semantic_distance: str
 
 
 class GraphTopic(BaseModel):

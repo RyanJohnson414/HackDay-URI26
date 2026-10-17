@@ -53,7 +53,7 @@ def test_rebuild_clears_topics_when_no_chunks(empty_schema):
         assert session.query(TopicRelation).count() == 0
 
 
-def test_rebuild_rejects_incompatible_embedding_dimensions(empty_schema):
+def test_rebuild_keeps_topics_for_incompatible_embedding_dimensions(empty_schema):
     with Session(empty_schema) as session:
         add_document(session, "doc-a", "a.txt")
         add_document(session, "doc-b", "b.txt")
@@ -62,5 +62,21 @@ def test_rebuild_rejects_incompatible_embedding_dimensions(empty_schema):
         add_chunk(session, "chunk-b", "doc-b", [1.0, 0.0, 0.0])
         session.commit()
 
-        with pytest.raises(ValueError, match="compatible embeddings"):
-            rebuild_topics(session)
+        assert rebuild_topics(session) == (2, 0)
+        topics = session.query(Topic).order_by(Topic.label).all()
+        assert {topic.label for topic in topics} == {"a.txt", "b.txt"}
+        assert all(chunk.topic_id for chunk in session.query(Chunk).all())
+
+
+def test_topic_labels_are_unique_for_separate_groups(empty_schema):
+    with Session(empty_schema) as session:
+        add_document(session, "doc-a", "Same title")
+        add_document(session, "doc-b", "Same title")
+        session.flush()
+        add_chunk(session, "chunk-a", "doc-a", [1.0, 0.0])
+        add_chunk(session, "chunk-b", "doc-b", [0.0, 1.0])
+        session.commit()
+
+        assert rebuild_topics(session) == (2, 0)
+        labels = {topic.label for topic in session.query(Topic).all()}
+        assert labels == {"Same title", "Same title (2)"}

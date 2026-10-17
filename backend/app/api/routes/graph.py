@@ -69,6 +69,7 @@ def get_graph(session: Session = Depends(get_db)):
             target_chunk_id=edge.target_chunk_id, similarity=edge.similarity,
             strength=edge.strength, weight=edge.weight, title=edge.title,
             explanation=edge.explanation, shared_concept=edge.shared_concept,
+            discipline_scope=edge.discipline_scope, semantic_distance=edge.semantic_distance,
         ) for edge in connections],
         topics=[GraphTopic(id=topic.id, label=topic.label, keywords=topic.keywords,
                            chunk_ids=topic_members.get(topic.id, [])) for topic in topics],

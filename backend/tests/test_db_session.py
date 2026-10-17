@@ -3,7 +3,7 @@ from pathlib import Path
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import make_url
 
-from app.db.models import Document
+from app.db.models import Base, Document
 from app.db.session import _resolve_database_url, init_db
 from app.db import seed as example_seed
 
@@ -64,6 +64,66 @@ def test_startup_is_idempotent(test_engine):
     init_db()
 
     assert "connections" in inspect(test_engine).get_table_names()
+
+
+def test_startup_migrates_and_backfills_connection_classifications(test_engine):
+    tables_without_connections = [
+        table for table in Base.metadata.sorted_tables if table.name != "connections"
+    ]
+    Base.metadata.create_all(bind=test_engine, tables=tables_without_connections)
+    with test_engine.begin() as connection:
+        connection.exec_driver_sql("""
+            CREATE TABLE connections (
+                id VARCHAR(36) PRIMARY KEY,
+                source_chunk_id VARCHAR(36) NOT NULL,
+                target_chunk_id VARCHAR(36) NOT NULL,
+                similarity FLOAT NOT NULL,
+                strength FLOAT NOT NULL,
+                weight FLOAT NOT NULL,
+                title VARCHAR(256) NOT NULL,
+                explanation TEXT NOT NULL,
+                shared_concept VARCHAR(256) NOT NULL,
+                created_at DATETIME NOT NULL,
+                FOREIGN KEY(source_chunk_id) REFERENCES chunks(id),
+                FOREIGN KEY(target_chunk_id) REFERENCES chunks(id)
+            )
+        """)
+        connection.exec_driver_sql("""
+            INSERT INTO documents (id, filename, title, domain, tags, sections, media_type, status, created_at)
+            VALUES
+                ('doc-a', 'a.txt', 'A', 'Neuroscience', '[]', '[]', 'text/plain', 'complete', CURRENT_TIMESTAMP),
+                ('doc-b', 'b.txt', 'B', 'neuroscience', '[]', '[]', 'text/plain', 'complete', CURRENT_TIMESTAMP),
+                ('doc-c', 'c.txt', 'C', 'Computer science', '[]', '[]', 'text/plain', 'complete', CURRENT_TIMESTAMP)
+        """)
+        connection.exec_driver_sql("""
+            INSERT INTO chunks (id, document_id, page_number, text, start_char, end_char, embedding, embedding_model)
+            VALUES
+                ('chunk-a', 'doc-a', 1, 'A', 0, 1, '[1.0, 0.0]', 'test'),
+                ('chunk-b', 'doc-b', 1, 'B', 0, 1, '[1.0, 0.0]', 'test'),
+                ('chunk-c', 'doc-c', 1, 'C', 0, 1, '[1.0, 0.0]', 'test')
+        """)
+        connection.exec_driver_sql("""
+            INSERT INTO connections (
+                id, source_chunk_id, target_chunk_id, similarity, strength, weight,
+                title, explanation, shared_concept, created_at
+            ) VALUES
+                ('edge-local', 'chunk-a', 'chunk-b', 0.9, 0.9, 0.86,
+                 'Local', 'Same discipline relation.', 'neural activity', CURRENT_TIMESTAMP),
+                ('edge-cross', 'chunk-a', 'chunk-c', 0.2, 0.7, 0.55,
+                 'Cross discipline', 'Cross discipline relation.', 'learning', CURRENT_TIMESTAMP)
+        """)
+
+    init_db()
+
+    with test_engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            "SELECT id, discipline_scope, semantic_distance FROM connections"
+        ).all()
+    values = {row[0]: (row[1], row[2]) for row in rows}
+    assert values == {
+        "edge-local": ("within_discipline", "local"),
+        "edge-cross": ("cross_discipline", "distant"),
+    }
 
 
 def test_example_database_seed_is_loaded_once(api_client, monkeypatch):

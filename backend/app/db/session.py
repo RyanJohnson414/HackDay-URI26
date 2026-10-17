@@ -47,6 +47,9 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     if make_url(DATABASE_URL).get_backend_name() == "sqlite":
         columns = {column["name"] for column in inspect(engine).get_columns("documents")}
+        connection_columns = {
+            column["name"] for column in inspect(engine).get_columns("connections")
+        }
         with engine.begin() as connection:
             if "title" not in columns:
                 connection.exec_driver_sql("ALTER TABLE documents ADD COLUMN title VARCHAR(512) NOT NULL DEFAULT ''")
@@ -59,6 +62,47 @@ def init_db() -> None:
                 connection.exec_driver_sql("ALTER TABLE documents ADD COLUMN tags JSON NOT NULL DEFAULT '[]'")
             if "sections" not in columns:
                 connection.exec_driver_sql("ALTER TABLE documents ADD COLUMN sections JSON NOT NULL DEFAULT '[]'")
+            if "discipline_scope" not in connection_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE connections ADD COLUMN discipline_scope VARCHAR(32) NOT NULL DEFAULT 'unknown'"
+                )
+                connection.exec_driver_sql("""
+                    UPDATE connections
+                    SET discipline_scope = CASE
+                        WHEN COALESCE((
+                            SELECT lower(trim(domain))
+                            FROM chunks JOIN documents ON documents.id = chunks.document_id
+                            WHERE chunks.id = connections.source_chunk_id
+                        ), 'uncategorized') = 'uncategorized'
+                          OR COALESCE((
+                            SELECT lower(trim(domain))
+                            FROM chunks JOIN documents ON documents.id = chunks.document_id
+                            WHERE chunks.id = connections.target_chunk_id
+                        ), 'uncategorized') = 'uncategorized' THEN 'unknown'
+                        WHEN (
+                            SELECT lower(trim(domain))
+                            FROM chunks JOIN documents ON documents.id = chunks.document_id
+                            WHERE chunks.id = connections.source_chunk_id
+                        ) = (
+                            SELECT lower(trim(domain))
+                            FROM chunks JOIN documents ON documents.id = chunks.document_id
+                            WHERE chunks.id = connections.target_chunk_id
+                        ) THEN 'within_discipline'
+                        ELSE 'cross_discipline'
+                    END
+                """)
+            if "semantic_distance" not in connection_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE connections ADD COLUMN semantic_distance VARCHAR(16) NOT NULL DEFAULT 'distant'"
+                )
+                connection.exec_driver_sql("""
+                    UPDATE connections
+                    SET semantic_distance = CASE
+                        WHEN weight >= 0.80 THEN 'local'
+                        WHEN weight >= 0.60 THEN 'related'
+                        ELSE 'distant'
+                    END
+                """)
 
 
 def get_db():

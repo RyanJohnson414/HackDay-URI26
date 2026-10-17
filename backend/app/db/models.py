@@ -73,6 +73,8 @@ class Connection(Base):
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     shared_concept: Mapped[str] = mapped_column(String(256), nullable=False)
+    discipline_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    semantic_distance: Mapped[str] = mapped_column(String(16), nullable=False, default="distant")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
 
 

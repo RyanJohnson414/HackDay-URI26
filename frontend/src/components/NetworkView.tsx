@@ -39,6 +39,18 @@ type Layout = { nodes: ViewNode[]; links: ViewLink[] };
 type Transform = { x: number; y: number; scale: number };
 type GraphDocument = DocumentRecord;
 
+function uniqueTopicLabel(label: string, usedLabels: Set<string>): string {
+  const base = label.trim() || "Untitled topic";
+  let candidate = base;
+  let suffix = 2;
+  while (usedLabels.has(candidate.toLowerCase())) {
+    candidate = `${base} (${suffix})`;
+    suffix += 1;
+  }
+  usedLabels.add(candidate.toLowerCase());
+  return candidate;
+}
+
 const PALETTE = {
   background: "#fffedb",
   cream: "#fffedb",
@@ -52,9 +64,14 @@ const HEIGHT = 1000;
 function buildLayout(graph: GraphResponse): Layout {
   const documents = new Map(graph.documents.map((document) => [document.id, document]));
   const chunks = new Map(graph.chunks.map((chunk) => [chunk.id, chunk]));
-  const topics: GraphTopic[] = graph.topics.length ? [...graph.topics] : graph.documents.map((document) => ({
+  const usedTopicLabels = new Set<string>();
+  const rawTopics: GraphTopic[] = graph.topics.length ? [...graph.topics] : graph.documents.map((document) => ({
     id: `topic:${document.id}`, label: document.title || document.filename,
     keywords: document.tags, chunk_ids: graph.chunks.filter((chunk) => chunk.document_id === document.id).map((chunk) => chunk.id),
+  }));
+  const topics = rawTopics.map((topic) => ({
+    ...topic,
+    label: uniqueTopicLabel(topic.label, usedTopicLabels),
   }));
 
   const topicsByDomain = new Map<string, GraphTopic[]>();
@@ -82,17 +99,19 @@ function buildLayout(graph: GraphResponse): Layout {
     }
   }
 
-  // Keep unassigned files visible by adding a local "Other" topic inside their domain.
+  // Keep files without persisted topic assignments visible as distinct, named nodes.
   for (const document of graph.documents) {
     if (docTopic.has(document.id)) continue;
     const domain = document.domain || "Uncategorized";
-    let topic = topicsByDomain.get(domain)?.find((item) => item.id === `topic:other:${domain}`);
-    if (!topic) {
-      topic = { id: `topic:other:${domain}`, label: "Other notes", keywords: [], chunk_ids: [] };
-      topics.push(topic);
-      topicDomain.set(topic.id, domain);
-      topicsByDomain.set(domain, [...(topicsByDomain.get(domain) || []), topic]);
-    }
+    const topic: GraphTopic = {
+      id: `topic:unassigned:${document.id}`,
+      label: uniqueTopicLabel(document.title || document.filename, usedTopicLabels),
+      keywords: document.tags,
+      chunk_ids: graph.chunks.filter((chunk) => chunk.document_id === document.id).map((chunk) => chunk.id),
+    };
+    topics.push(topic);
+    topicDomain.set(topic.id, domain);
+    topicsByDomain.set(domain, [...(topicsByDomain.get(domain) || []), topic]);
     docTopic.set(document.id, { topic, count: 0 });
   }
 
@@ -206,7 +225,8 @@ function buildLayout(graph: GraphResponse): Layout {
     const weight = count
       ? Math.max(...group.connections.map((item) => item.weight), group.topicSimilarity || 0)
       : group.topicSimilarity || 0;
-    const crossDomain = topicDomain.get(group.source.id) !== topicDomain.get(group.target.id);
+    const crossDomain = group.connections.some((item) => item.discipline_scope === "cross_discipline")
+      || topicDomain.get(group.source.id) !== topicDomain.get(group.target.id);
     links.push({ id: `topic-bridge:${key}`, source: group.source.id, target: group.target.id,
       kind: crossDomain ? "bridge" : "local", crossTopic: true, weight,
       title: `${group.source.label} / ${group.target.label}`, relation: {
@@ -305,6 +325,12 @@ export default function NetworkView() {
     void refresh();
     return () => document.body.classList.remove("network-mode", "network-dark-mode");
   }, [refresh]);
+
+  useEffect(() => {
+    if (backendConnected) return;
+    const retry = window.setInterval(() => { void refresh(); }, 3000);
+    return () => window.clearInterval(retry);
+  }, [backendConnected, refresh]);
 
   useEffect(() => {
     document.body.classList.toggle("network-dark-mode", darkMode);
@@ -512,7 +538,7 @@ export default function NetworkView() {
             const focused = !focusId || neighbors.has(source.id) && neighbors.has(target.id);
             const opacity = focusId ? focused ? 0.95 : 0.1 : 0.78;
             const isBridge = link.kind === "bridge";
-            const color = link.kind === "hierarchy" || link.kind === "local" ? PALETTE.local :
+            const color = link.kind === "hierarchy" || link.kind === "local" ? (darkMode ? PALETTE.cream : PALETTE.local) :
               link.kind === "bridge" ? PALETTE.bridge : PALETTE.muted;
             const isGreenLink = link.kind === "hierarchy" || link.kind === "local";
             const d = isBridge ? curvedPath(source, target, 58, transform.scale)
@@ -520,9 +546,8 @@ export default function NetworkView() {
             const score = link.relation?.similarity ?? link.weight;
             const scoreX = (source.x + target.x) / 2;
             const scoreY = (source.y + target.y) / 2 - (isBridge ? 28 : 10);
-            const strength = Math.max(0, Math.min(1, link.weight ?? link.relation?.similarity ?? 0));
-            const bridgeWidth = 1.8 + strength * 1.8
-              + Math.min(0.45, Math.log2(1 + (link.relation?.connections.length || 0)) * 0.15);
+            const strength = Math.max(0, Math.min(1, link.relation?.similarity ?? link.weight ?? 0));
+            const relationshipWidth = 0.65 + strength * 1.6;
             const gradientId = `bridge-gradient-${link.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
             return <g key={link.id} opacity={opacity} data-network-relation={link.relation ? "true" : undefined}
               className={link.relation ? "topic-bridge-link" : undefined}
@@ -537,7 +562,7 @@ export default function NetworkView() {
               </linearGradient></defs>}
               <path d={d} className={isBridge ? "network-bridge-line" : undefined}
                 stroke={isBridge ? `url(#${gradientId})` : color}
-                strokeWidth={isGreenLink ? 0.8 : isBridge ? bridgeWidth : 2.5}
+                strokeWidth={isGreenLink || isBridge ? relationshipWidth : 2.5}
                 opacity={link.kind === "hierarchy" ? 0.9 : 1} fill="none"
                 filter={isBridge && focused ? "url(#bridge-glow)" : undefined}>
                 <title>{link.relation

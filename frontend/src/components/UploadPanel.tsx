@@ -49,7 +49,7 @@ export default function UploadPanel({ onComplete }: { onComplete: (result: Inges
   return (
     <section className="ingest-card">
       <div className="ingest-heading"><span className="ingest-icon">＋</span><div>
-        <strong>Add a source</strong><span>PDF, text file, or public web page</span>
+        <strong>Add a source</strong><span>PDF, text, CSV, TSV, Markdown, or public web page</span>
       </div></div>
       <form className="file-form" onSubmit={submitFile}>
         <label className="file-picker">

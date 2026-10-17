@@ -22,6 +22,9 @@ class FakeEmbedder:
 
 
 class FakeGemini:
+    def __init__(self):
+        self.assessed_connections = []
+
     def analyze_document(self, _filename: str, _pages):
         return DocumentAnalysis(
             title="Generated analysis title",
@@ -34,6 +37,7 @@ class FakeGemini:
         )
 
     def assess_connection(self, _left: str, _right: str):
+        self.assessed_connections.append((_left, _right))
         return ConnectionAssessment(
             relevant=True,
             strength=0.9,
@@ -41,6 +45,15 @@ class FakeGemini:
             explanation="Both passages describe systems that adapt to changing local conditions.",
             shared_concept="local adaptation",
         )
+
+
+class RecordingEmbedder(FakeEmbedder):
+    def __init__(self):
+        self.calls = []
+
+    def embed_chunks(self, chunks):
+        self.calls.extend(chunks)
+        return super().embed_chunks(chunks)
 
 
 def install_fake_ingestion(monkeypatch):
@@ -96,6 +109,8 @@ def test_note_ingestion_persists_and_exposes_cross_document_connection(api_clien
     assert len(body["chunks"]) == 2
     assert len(body["connections"]) == 1
     assert body["connections"][0]["shared_concept"] == "local adaptation"
+    assert body["connections"][0]["discipline_scope"] == "cross_discipline"
+    assert body["connections"][0]["semantic_distance"] == "related"
     assert len(body["related_topics"]) == 1
 
     with session_factory() as session:
@@ -105,11 +120,32 @@ def test_note_ingestion_persists_and_exposes_cross_document_connection(api_clien
 
 def test_file_upload_uses_parser_and_persists_gemini_metadata(api_client, monkeypatch):
     client, _ = api_client
-    install_fake_ingestion(monkeypatch)
+    gemini = FakeGemini()
+
+    class OrthogonalEmbedder:
+        def embed_chunks(self, chunks):
+            return [
+                EmbeddedChunk(
+                    chunk=chunk,
+                    vector=(1.0, 0.0) if "existing" in chunk.text.lower() else (0.0, 1.0),
+                    model="test-embedding",
+                )
+                for chunk in chunks
+            ]
+
+    monkeypatch.setattr(
+        document_routes,
+        "IngestionService",
+        lambda: IngestionService(
+            embedder=OrthogonalEmbedder(),
+            connection_engine=ConnectionEngine(gemini_client=gemini),
+            gemini_client=gemini,
+        ),
+    )
     note_response = client.post("/api/documents/note", json={
         "title": "Existing source",
         "domain": "Research",
-        "content": "Local signals help systems adapt to changing conditions.",
+        "content": "Existing source discusses local signals and changing conditions.",
         "tags": [],
     })
     assert note_response.status_code == 201
@@ -126,6 +162,73 @@ def test_file_upload_uses_parser_and_persists_gemini_metadata(api_client, monkey
     assert document["sections"][0]["title"] == "Generated section"
     assert document["chunk_count"] == 1
     assert response.json()["connection_count"] == 1
+    assert len(gemini.assessed_connections) == 1
+
+
+def test_pdf_upload_is_parsed_and_ingested(api_client, monkeypatch):
+    import fitz
+
+    client, _ = api_client
+    install_fake_ingestion(monkeypatch)
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "Artificial neural networks process signals through connected units.")
+
+    response = client.post("/api/documents/upload", files={
+        "file": ("neural-networks.pdf", pdf.tobytes(), "application/pdf"),
+    })
+
+    assert response.status_code == 201
+    assert response.json()["document"]["media_type"] == "application/pdf"
+    assert response.json()["document"]["chunk_count"] == 1
+
+
+def test_upload_refreshes_old_embedding_and_gives_gemma_both_source_contexts(
+    api_client, monkeypatch
+):
+    client, session_factory = api_client
+    gemini = FakeGemini()
+    embedder = RecordingEmbedder()
+    monkeypatch.setattr(
+        document_routes,
+        "IngestionService",
+        lambda: IngestionService(
+            embedder=embedder,
+            connection_engine=ConnectionEngine(gemini_client=gemini),
+            gemini_client=gemini,
+        ),
+    )
+    existing = client.post("/api/documents/note", json={
+        "title": "Existing source",
+        "domain": "Research",
+        "content": "Local signals guide existing system behavior.",
+        "tags": ["feedback"],
+    })
+    assert existing.status_code == 201
+
+    with session_factory() as session:
+        old_chunk = session.query(Chunk).filter(
+            Chunk.document_id == existing.json()["document"]["id"]
+        ).one()
+        old_chunk.embedding_model = "old-model"
+        session.commit()
+
+    before_refresh = len(embedder.calls)
+    uploaded = client.post("/api/documents/upload", files={
+        "file": ("new-source.txt", b"Local signals guide new system behavior.", "text/plain"),
+    })
+
+    assert uploaded.status_code == 201
+    assert len(embedder.calls) > before_refresh + 1
+    assert len(gemini.assessed_connections) == 1
+    left, right = gemini.assessed_connections[0]
+    assert "Document title: Existing source" in left or "Document title: Existing source" in right
+    assert "SOURCE PASSAGE:" in left and "SOURCE PASSAGE:" in right
+    with session_factory() as session:
+        refreshed = session.query(Chunk).filter(
+            Chunk.document_id == existing.json()["document"]["id"]
+        ).one()
+        assert refreshed.embedding_model == "test-embedding"
 
 
 def test_url_ingestion_reparses_extracted_text_and_persists_metadata(api_client, monkeypatch):

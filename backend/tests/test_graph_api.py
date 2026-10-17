@@ -47,7 +47,8 @@ def test_graph_endpoint_returns_database_documents_chunks_and_edges(api_client):
             id="edge-a-b", source_chunk_id="chunk-a", target_chunk_id="chunk-b",
             similarity=0.6, strength=0.9, weight=0.78, title="Shared local adaptation",
             explanation="Both passages explain systems that adapt to nearby conditions.",
-            shared_concept="local adaptation",
+            shared_concept="local adaptation", discipline_scope="cross_discipline",
+            semantic_distance="related",
         ))
         session.add(TopicRelation(source_topic_id="topic-a", target_topic_id="topic-b", similarity=0.6))
         session.commit()
@@ -65,6 +66,8 @@ def test_graph_endpoint_returns_database_documents_chunks_and_edges(api_client):
         "title": "Shared local adaptation",
         "explanation": "Both passages explain systems that adapt to nearby conditions.",
         "shared_concept": "local adaptation",
+        "discipline_scope": "cross_discipline",
+        "semantic_distance": "related",
     }]
     assert body["related_topics"] == [{
         "source_topic_id": "topic-a", "target_topic_id": "topic-b", "similarity": 0.6,
