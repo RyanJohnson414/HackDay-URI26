@@ -1,76 +1,173 @@
 # Consilience
 
-Consilience means the convergence of knowledge across different fields. This
-AI-powered knowledge graph finds useful connections across your documents and
-surfaces ideas that bridge disciplines.
+Consilience is a local-first knowledge graph for exploring how ideas in
+different documents relate. Add notes, files, or public web pages; the backend
+extracts and analyzes their text, groups similar passages into topics, and asks
+the configured Gemini model (Gemma by default) to check possible links between
+sources. The resulting graph is stored in SQLite and displayed by a React
+website.
 
-## MVP structure
+The app does not have a prewritten list of expected connections. A connection
+is created only after the model assesses two real passages and the result
+passes the score threshold described below. Embeddings help find candidate
+passages, but are not by themselves treated as proof that two sources are
+related.
 
-```text
-HackDay-URI26/
-├── README.md
-├── .gitignore
-├── backend/
-│   ├── .env.example
-│   ├── pyproject.toml
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── core/config.py
-│   │   ├── api/routes/
-│   │   │   ├── documents.py
-│   │   │   ├── graph.py
-│   │   │   └── discoveries.py
-│   │   ├── db/
-│   │   │   ├── models.py
-│   │   │   └── session.py
-│   │   ├── schemas/
-│   │   └── services/
-│   │       ├── document_parser.py
-│   │       ├── chunking.py
-│   │       ├── embeddings.py
-│   │       ├── gemini_client.py
-│   │       └── connection_engine.py
-│   └── tests/
-├── frontend/
-│   ├── package.json
-│   ├── index.html
-│   ├── tsconfig.json
-│   ├── vite.config.ts
-│   └── src/
-│       ├── main.tsx
-│       ├── App.tsx
-│       ├── api/client.ts
-│       ├── components/
-│       │   ├── UploadPanel.tsx
-│       │   ├── KnowledgeGraph.tsx
-│       │   └── DiscoveryFeed.tsx
-│       └── types/index.ts
-└── data/
-    └── uploads/
-```
+## What happens when you add a source
 
-## Backend setup (Linux / WSL)
+1. **Read the source.** The backend accepts PDF, CSV/TSV, plain-text or Markdown
+   uploads, pasted notes, and public web URLs. PDFs retain page numbers;
+   delimited files are rendered as labeled rows; text and notes are treated as
+   one page. Unsupported or unreadable sources return an error.
+2. **Analyze the text.** The configured Gemini model is asked to derive a title,
+   academic or practical domain, tags, and section summaries from the source.
+   This analysis is grounded in the supplied text, not an external document
+   catalog.
+3. **Split and embed passages.** Text is divided into chunks of about 1,200
+   characters, with up to 180 characters of overlap. Each chunk is sent to the
+   configured embedding model and stored with its vector and source location.
+   Overlap helps keep ideas near chunk boundaries available to later steps.
+4. **Build topic groups.** The backend compares chunk vectors throughout the
+   stored corpus. Similar chunks are grouped, then named from a document title
+   for single-source groups or informative keywords for multi-source groups.
+5. **Check cross-document candidates.** The connection engine compares chunks
+   from different documents. It sends promising candidates, along with document
+   context such as title, domain, tags, and analyzed sections, to the configured
+   model for a grounded relatedness assessment. The assessment includes an
+   explanation and short supporting quotes when available.
+6. **Persist and display.** Documents, chunks, embeddings, topics, topic
+   relations, and accepted connections are stored in SQLite. The frontend reads
+   the graph through the backend API; it does not calculate the persisted link
+   scores itself.
 
-Run these commands from the `backend` directory. Create the virtual environment
-once, then activate it and install the project dependencies:
+## How the math works
 
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
-uvicorn app.main:app --reload
-```
+There are several scores in the graph. They answer different questions and
+should not be read as interchangeable probabilities.
 
-If the `venv` creation command reports that `ensurepip` is unavailable, install
-the matching `python3-venv` system package first. Each new terminal needs the
-`source .venv/bin/activate` command before running the backend.
+### 1. Embedding cosine similarity
 
-## Backend setup (Windows PowerShell)
+An embedding represents a chunk as a vector of numbers. For two vectors
+\(\mathbf{a}\) and \(\mathbf{b}\), the backend calculates cosine similarity:
 
-Run these commands from the repository root. Create and install the virtual
-environment once:
+\[
+\operatorname{cosine}(\mathbf{a}, \mathbf{b}) =
+\frac{\mathbf{a}\cdot\mathbf{b}}
+{\|\mathbf{a}\|\,\|\mathbf{b}\|}
+\]
+
+Values closer to 1 indicate vectors pointing in similar directions; values
+around 0 indicate little directional similarity. This is a retrieval signal:
+it helps choose which passages are worth asking the language model to compare.
+It is not the final connection decision.
+
+For an upload, pairs with similarity of at least **0.01** are candidates. The
+engine also sends up to the five nearest candidates for each new chunk, even if
+their similarity is below that threshold, so a low embedding score alone does
+not automatically hide a possible connection. If vectors cannot be compared
+because their dimensions differ, shared-word overlap is used to rank the
+fallback candidates; incompatible vectors are not given a fabricated cosine
+score.
+
+### 2. Model-assessed connection strength
+
+For each candidate pair, the configured Gemini model scores the relationship
+from **0 to 1**, using this guidance:
+
+| Model strength | Intended interpretation |
+| --- | --- |
+| 0.00–0.19 | No meaningful relation |
+| 0.20–0.39 | Broad vocabulary or weak analogy |
+| 0.40–0.49 | Weak or speculative relation |
+| 0.50–0.79 | Specific, evidence-backed shared concept or mechanism |
+| 0.80–1.00 | Direct, substantial relation supported by both passages |
+
+The model is instructed to mark a pair relevant only at **0.50 or above**.
+Pairs below that threshold are discarded, not saved as connections. Its score
+is a model judgment guided by this rubric—not a statistically calibrated
+probability that the passages are objectively related.
+
+### 3. Blended connection weight
+
+For a model-approved pair, the displayed and stored weight combines the
+embedding signal and model judgment:
+
+\[
+\text{weight} =
+\operatorname{clamp}_{[0,1]}
+\left(0.35 \times \text{cosine similarity}
++ 0.65 \times \text{model strength}\right)
+\]
+
+The model strength has more influence (65%) than vector similarity (35%).
+Clamping keeps the result between 0 and 1. For example, if similarity is 0.70
+and model strength is 0.80, the weight is
+\(0.35(0.70)+0.65(0.80)=0.765\), or about **77%** in the interface. This
+percentage is a blended ranking score, not a probability or a guarantee.
+
+Accepted connections are labeled by that weight:
+
+| Weight | Semantic-distance label |
+| --- | --- |
+| 0.80–1.00 | `local` |
+| 0.60–0.79 | `related` |
+| Below 0.60 | `distant` |
+
+The minimum model strength still applies: a pair is not accepted just because
+its embedding similarity is high.
+
+### 4. Topic groups and related-topic links
+
+Topic grouping uses embeddings separately from the model-judged source
+connections:
+
+- Two chunks are joined when their cosine similarity is at least **0.72**.
+  Connected components form groups, so a chain of similar chunks may place two
+  chunks in the same group even if those two chunks are not directly similar
+  enough to meet the threshold.
+- A topic centroid is the component-wise average of its member chunk vectors.
+- Two distinct topics get a related-topic link when their centroid cosine
+  similarity is at least **0.58**.
+
+These thresholds are practical grouping rules, not universal definitions of a
+topic. They can be tuned in `backend/app/services/topic_service.py`.
+
+For multi-source groups, the topic label is based on up to three informative
+keywords. Each word is ranked using a TF-IDF-like weight:
+
+\[
+\text{term frequency in group}
+\times
+\log\left(\frac{\text{number of chunks}+1}
+{\text{chunks containing the term}+1}\right)
+\]
+
+The frequency factor favors words that occur in the group; the logarithmic
+factor favors words that are less common across the corpus. Common stop words
+are excluded. If all chunks in a group come from one document, the analyzed
+document title is used instead. Duplicate labels receive a numeric suffix.
+
+### 5. Discipline scope
+
+Discipline scope is derived from the analyzed document domains, not from vector
+math:
+
+- `within_discipline`: normalized domain strings match.
+- `cross_discipline`: both domains are present and differ.
+- `unknown`: either domain is missing or marked uncategorized.
+
+This is a simple domain-label comparison. It does not attempt to infer a
+hierarchy between disciplines.
+
+## Run locally
+
+You need Python 3.11 or newer, Node.js with npm, and a Gemini API key for
+document analysis, embeddings, and model-checked connections. Install the
+backend once:
+
+### Windows PowerShell
+
+From the repository root:
 
 ```powershell
 cd backend
@@ -84,58 +181,132 @@ Start the backend in that terminal:
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-In a second terminal, start the website with `cd frontend` and `npm run dev`.
-Keep both terminals running. The backend initializes SQLite and starts serving
-before loading the optional context-check files in the background, so model
-provider delays do not prevent the website from connecting.
+In a second terminal:
 
-## Database and graph API
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open the local Vite address printed by `npm run dev` (usually
+`http://localhost:5173`). Keep both terminals running: the website sends API
+requests through Vite to the backend at `http://127.0.0.1:8000`. If the backend
+is temporarily unavailable, the site retries graph loading automatically.
+
+### Linux / WSL
+
+From the repository root, install the backend once:
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+```
+
+Start it in one terminal:
+
+```bash
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Start the frontend in another terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+If creating the Linux virtual environment reports that `ensurepip` is
+unavailable, install the matching system `python3-venv` package first.
+
+## Configure Gemini
+
+Copy `backend/.env.example` to `backend/.env`, then set the API key and (if
+needed) model names:
+
+```dotenv
+GEMINI_API_KEY=your-key
+GEMINI_MODEL=gemma-3-27b-it
+EMBEDDING_MODEL=gemini-embedding-001
+EMBEDDING_DIMENSIONS=768
+```
+
+The `.env` file is ignored by Git. Use a model identifier supported by the
+Gemini API and enabled for your key; never commit the key. Provider errors can
+interrupt analysis or candidate assessment. If one candidate fails, the
+ingestion process records a warning and continues with other candidates. If
+document analysis or embedding fails, that source may not reach graph
+connection assessment.
+
+## Where source data goes
+
+The graph database is local by default (`backend/knowledge_graph.db`), and the
+website talks to the local backend. However, this is not an offline-only
+application: source text is sent to the configured Gemini API for document
+analysis and embeddings, and passage text plus document context is sent for
+connection assessment. Do not submit material unless using that provider is
+appropriate for it. The database stores the extracted text, source metadata,
+embeddings, and assessed connection explanations/evidence on this machine.
+
+## SQLite, startup sources, and API
 
 The default database is `backend/knowledge_graph.db`. Relative SQLite paths in
-`DATABASE_URL` are resolved from the backend directory, regardless of the
-directory from which the server is launched. FastAPI creates the database
-tables during application startup (`app.main` lifespan); no separate
-migration/setup command is required for a new local database.
+`DATABASE_URL` are resolved from the backend directory. On startup, the backend
+initializes the schema and applies additive SQLite migrations; existing source
+records are not wiped for these migrations.
 
-The frontend requests `GET /api/graph`; Vite proxies `/api` to the backend at
-`http://127.0.0.1:8000`. The graph response is read from the SQLite documents,
-chunks, topic, and connection tables. Ingesting a new source persists its
-passages, discovers cross-document links, and refreshes the graph response.
-At startup, the backend reads every `.txt` file in
-`backend/context_check_sources/` and sends it through the same parser, Gemma
-analysis, embedding, topic grouping, and connection discovery pipeline as an
-uploaded file. The folder contains only source prose: no expected labels,
-vectors, topic assignments, or connection scores. Unchanged fixtures are not
-re-ingested on later starts; edited source text is reprocessed so new evidence
-reaches the model, and failed or partial fixtures are retried. A working Gemini
-API key and network connection are needed to process these files. Provider
-errors are logged, and the backend still starts.
+The folder `backend/context_check_sources/` contains plain prose fixtures used
+to exercise the real ingestion pipeline. They contain no predefined topics,
+connections, labels, or scores. After the API starts, the backend processes
+these files in the background, so a slow model provider does not block the
+website from connecting. Successfully ingested fixture files are skipped on
+later starts; failed or partial ones are retried. Provider failures are logged
+and do not prevent the backend from serving requests.
 
-## Gemini configuration
+Useful endpoints:
 
-Copy `backend/.env.example` to `backend/.env` and add your Gemini API key
-there. The `.env` file is ignored by Git. Set `GEMINI_MODEL` to the exact Gemma
-model identifier supported by the Gemini API and available to your key; do not
-commit the key.
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Check that the backend is responding |
+| `GET /api/graph` | Load the documents, chunks, topics, and connections |
+| `GET /api/documents` | List ingested documents and their processing status |
+| `POST /api/documents/upload` | Upload a supported file |
+| `POST /api/documents/url` | Ingest a public web URL |
+| `POST /api/documents/note` | Ingest a pasted note |
 
-## Intended request flow
+The interactive API documentation is available at `http://127.0.0.1:8000/docs`
+when the backend is running.
 
-1. On startup, read the context-check text corpus; or add a PDF, CSV/TSV,
-   text/Markdown file, public web URL, or pasted note.
-2. Extract the full text through the document parser, then ask the configured
-   `GEMINI_MODEL` to generate grounded titles, domains, tags, and page-based
-   section summaries.
-3. Chunk and embed the parsed source, group comparable passages into topics
-   (using analyzed source titles for single-source groups), and ask the
-   configured model to assess cross-document candidates with embedding
-   similarity of at least 0.01. Retain model-confirmed links with strength of
-   at least 0.50; default candidate and result counts are not capped.
-4. Persist source metadata, sections, passages, vectors, uniquely named topics,
-   and Gemma-confirmed connections in SQLite and return them through the graph
-   API. Each connection stores vector similarity, model strength, blended weight,
-   a semantic-distance label (local / related / distant), and discipline scope
-   (within-discipline / cross-discipline / unknown). The semantic-distance label
-   is derived from blended weight: at least 0.80 is local, at least 0.60 is
-   related, and lower confirmed weights are distant. Existing SQLite databases
-   are migrated and existing connections are backfilled at startup without
-   deleting source records.
+## Project layout
+
+```text
+backend/
+  app/
+    api/                 HTTP routes and graph serialization
+    core/                Environment and application settings
+    db/                  SQLite models, sessions, and migrations
+    services/             Parsing, chunking, embeddings, Gemini, grouping, links
+  context_check_sources/  Plain-text startup fixtures
+  tests/                  Backend tests
+frontend/
+  src/
+    api/                  Browser-to-backend client
+    components/            Upload, graph, and discovery UI
+    App.tsx                Main application view
+```
+
+Run backend tests from `backend` with:
+
+```bash
+python -m pytest -q
+```
+
+Build and type-check the frontend from `frontend` with:
+
+```bash
+npm run build
+```

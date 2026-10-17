@@ -40,12 +40,15 @@ def test_bundled_context_sources_cover_shared_topics_and_cross_domain_bridge():
         "adaptive_traffic_signals.txt",
         "artificial_neural_networks.txt",
         "ant_foraging.txt",
+        "bread_fermentation_and_proofing.txt",
+        "cake_leavening_and_recipe_steps.txt",
         "distributed_robot_swarming.txt",
         "fish_schooling.txt",
         "fish_schooling_and_neural_networks.txt",
         "networked_behavior_comparison.txt",
         "neural_network_and_brain_circuits.txt",
         "neuron_population_activity.txt",
+        "recipe_instructions_and_baking_results.txt",
         "memory_consolidation.txt",
         "neural_network_learning.txt",
         "synaptic_plasticity.txt",
@@ -60,6 +63,9 @@ def test_bundled_context_sources_cover_shared_topics_and_cross_domain_bridge():
     assert "artificial neural network" in sources["artificial_neural_networks.txt"]
     assert "biological neural network" in sources["neural_network_and_brain_circuits.txt"]
     assert "fish schooling" in sources["fish_schooling_and_neural_networks.txt"]
+    assert "carbon dioxide" in sources["bread_fermentation_and_proofing.txt"]
+    assert "baking powder" in sources["cake_leavening_and_recipe_steps.txt"]
+    assert "stopping cue" in sources["recipe_instructions_and_baking_results.txt"]
     assert "nearby cells" in sources["neuron_population_activity.txt"]
     assert "nearby teammates" in sources["distributed_robot_swarming.txt"]
     assert "synaptic" in sources["synaptic_plasticity.txt"]
