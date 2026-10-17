@@ -361,7 +361,11 @@ export default function NetworkView() {
   const nodeById = useMemo(() => new Map(layout.nodes.map((node) => [node.id, node])), [layout.nodes]);
   const focusId = hoveredId || selectedId;
   const selectedNode = focusId ? nodeById.get(focusId) : undefined;
-  const summaryTopicId = selectedNode?.kind === "topic" && transform.scale >= 1.2 ? selectedNode.id : null;
+  // Generate the optional AI description when a topic is explicitly selected.
+  // The inspector also has a source-grounded fallback, so it remains useful if
+  // the model is unavailable or the topic has no verified connections.
+  const selectedTopic = selectedId ? nodeById.get(selectedId) : undefined;
+  const summaryTopicId = selectedTopic?.kind === "topic" ? selectedTopic.id : null;
 
   useEffect(() => {
     if (embedded || !summaryTopicId) return;
@@ -481,6 +485,22 @@ export default function NetworkView() {
     : selectedNode?.kind === "topic"
       ? graph.chunks.filter((chunk) => selectedNode.chunkIds.includes(chunk.id))
       : graph.chunks.filter((chunk) => selectedNode?.chunkIds.includes(chunk.id));
+  const topicDescription = selectedNode?.kind === "topic" ? (() => {
+    const sourceIds = new Set(relatedChunks.map((chunk) => chunk.document_id));
+    const sourceDocs = [...sourceIds].map((id) => documents.get(id)).filter((doc): doc is DocumentRecord => Boolean(doc));
+    const sectionDescriptions = sourceDocs.flatMap((doc) => doc.sections
+      .map((section) => section.summary.trim()).filter(Boolean));
+    if (sectionDescriptions.length) return sectionDescriptions.slice(0, 2).join(" ");
+    const passage = relatedChunks.map((chunk) => chunk.text.replace(/\s+/g, " ").trim())
+      .filter(Boolean).slice(0, 2).join(" ");
+    if (passage) return passage.length > 520 ? `${passage.slice(0, 517).trimEnd()}...` : passage;
+    const keywords = selectedNode.topic?.keywords || [];
+    return keywords.length
+      ? `${selectedNode.label} is a topic represented by source material about ${keywords.slice(0, 6).join(", ")}.`
+      : `${selectedNode.label} is a topic identified in the source material. Add more source text to expand its description.`;
+  })() : "";
+  const activeTopicSummary = selectedNode?.kind === "topic" && topicSummary?.topicId === selectedNode.id
+    ? topicSummary : null;
   const centroidDistance = relatedChunks.length
     ? relatedChunks.map((chunk) => chunk.centroid_distance).filter((value): value is number => value !== null)
       .reduce((sum, value, _, all) => sum + value / all.length, 0)
@@ -619,17 +639,6 @@ export default function NetworkView() {
         </g>
       </svg>
 
-      {summaryTopicId && <section className="topic-ai-summary" aria-live="polite">
-        <div className="topic-ai-summary-head"><span>GEMMA TOPIC SUMMARY</span><small>{selectedNode?.label}</small></div>
-        {summaryLoading && <p>Reading passages in this topic...</p>}
-        {summaryError && <p className="topic-ai-error">{summaryError}</p>}
-        {topicSummary?.topicId === summaryTopicId && <>
-          <p>{topicSummary.text}</p>
-          {topicSummary.points.length > 0 && <ul>{topicSummary.points.map((point, index) => <li key={`${index}:${point}`}>{point}</li>)}</ul>}
-          <small>Based on {topicSummary.sources} source{topicSummary.sources === 1 ? "" : "s"} in this topic</small>
-        </>}
-      </section>}
-
       {selectedRelation && <section className="topic-relation-popup" role="dialog" aria-label="Topic relationship details">
         <button className="topic-relation-close" onClick={() => setSelectedRelation(null)} aria-label="Close relationship details">X</button>
         <span className="relation-popup-eyebrow">PRIMARY TOPIC RELATION</span>
@@ -723,6 +732,15 @@ export default function NetworkView() {
           </>}
           {selectedNode.topic && <div className="inspector-section"><span>TOPIC KEYWORDS</span>
             <div className="inspector-tags">{selectedNode.topic.keywords.map((tag) => <i key={tag}>{tag}</i>)}</div>
+          </div>}
+          {selectedNode.kind === "topic" && <div className="inspector-section topic-description" aria-live="polite">
+            <span>{activeTopicSummary ? "AI TOPIC DESCRIPTION" : "TOPIC DESCRIPTION"}</span>
+            <p>{activeTopicSummary?.text || topicDescription}</p>
+            {summaryLoading && <small>AI is reviewing this topic's source passages...</small>}
+            {summaryError && <small className="topic-ai-error">AI description unavailable; showing the source text summary.</small>}
+            {activeTopicSummary?.points.length ? <ul>{activeTopicSummary.points.map((point, index) =>
+              <li key={`${index}:${point}`}>{point}</li>)}</ul> : null}
+            {activeTopicSummary && <small>Based on {activeTopicSummary.sources} source{activeTopicSummary.sources === 1 ? "" : "s"} in this topic</small>}
           </div>}
           <div className="inspector-section bridges-section"><span>VERIFIED CONNECTIONS / {connectedBridges.length}</span>
             {connectedBridges.slice(0, 5).map((connection) => {
