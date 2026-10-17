@@ -49,13 +49,15 @@ def _reference(item: EmbeddedChunk) -> ChunkReference:
 
 
 class ConnectionEngine:
+    MIN_CONNECTION_STRENGTH = 0.75
+
     def __init__(self, *, gemini_client: GeminiClient | None = None):
         self.gemini = gemini_client or GeminiClient()
 
     def find_connections(self, embedded_chunks: list[EmbeddedChunk], *,
                          similarity_threshold: float = 0.35,
-                         max_candidates: int = 40,
-                         max_connections: int = 20) -> list[Connection]:
+                         max_candidates: int = 100,
+                         max_connections: int = 50) -> list[Connection]:
         """Return evaluated cross-document edges, each grounded in two real chunk IDs."""
         if not 0 <= similarity_threshold <= 1:
             raise ValueError("similarity_threshold must be between 0 and 1")
@@ -84,7 +86,9 @@ class ConnectionEngine:
                 raise ConnectionEngineError(
                     f"Could not assess chunks {candidate.left.chunk.id} and {candidate.right.chunk.id}: {exc}"
                 ) from exc
-            if not assessment.relevant or assessment.strength <= 0:
+            # Keep only model-confirmed high-confidence connections. The threshold is
+            # strict so a score of exactly 0.75 does not count as "above 0.75".
+            if not assessment.relevant or assessment.strength <= self.MIN_CONNECTION_STRENGTH:
                 continue
             # Blend semantic retrieval and model judgment so neither alone sets the edge weight.
             weight = max(0.0, min(1.0, 0.4 * candidate.similarity + 0.6 * assessment.strength))

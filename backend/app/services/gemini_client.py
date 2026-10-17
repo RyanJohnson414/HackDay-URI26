@@ -4,6 +4,7 @@ import json
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.config import get_settings
+from app.services.genai_provider import create_genai_client
 
 
 class GeminiClientError(RuntimeError):
@@ -23,6 +24,20 @@ class TopicSummary(BaseModel):
     key_points: list[str] = Field(max_length=5)
 
 
+class DocumentSection(BaseModel):
+    title: str = Field(min_length=2, max_length=120)
+    summary: str = Field(min_length=10, max_length=500)
+    page_start: int = Field(ge=1)
+    page_end: int = Field(ge=1)
+
+
+class DocumentAnalysis(BaseModel):
+    title: str = Field(min_length=2, max_length=512)
+    domain: str = Field(min_length=2, max_length=256)
+    tags: list[str] = Field(max_length=20)
+    sections: list[DocumentSection] = Field(max_length=30)
+
+
 class GeminiClient:
     def __init__(self, *, client=None, model: str | None = None):
         self.model = model or get_settings().gemini_model
@@ -34,8 +49,7 @@ class GeminiClient:
             if not key:
                 raise GeminiClientError("GEMINI_API_KEY is required for Gemma AI features")
             try:
-                from google import genai
-                self._client = genai.Client(api_key=key)
+                self._client = create_genai_client(key)
             except Exception as exc:
                 raise GeminiClientError(f"Could not initialize Gemini client: {exc}") from exc
         return self._client
@@ -93,6 +107,70 @@ SOURCE PASSAGES:
             raise GeminiClientError(f"Gemma returned an invalid topic summary: {exc}") from exc
         except Exception as exc:
             raise GeminiClientError(f"Gemma topic summary request failed: {exc}") from exc
+
+    def analyze_document(self, filename: str, pages: list[tuple[int, str]]) -> DocumentAnalysis:
+        """Use the configured Gemini model to label all parsed source text in bounded batches."""
+        if not pages or not any(text.strip() for _, text in pages):
+            raise GeminiClientError("The parsed document has no text to analyze")
+
+        batches: list[tuple[int, int, str]] = []
+        batch_limit = 30000
+        for page_number, text in pages:
+            for offset in range(0, len(text), batch_limit):
+                batches.append((page_number, page_number, text[offset:offset + batch_limit]))
+
+        analyses = [self._analyze_document_batch(filename, start, end, text)
+                    for start, end, text in batches]
+        first = analyses[0]
+        page_limit = max(page_number for page_number, _ in pages)
+        domains: dict[str, int] = {}
+        tags: list[str] = []
+        sections: list[DocumentSection] = []
+        section_keys: set[tuple[str, int, int]] = set()
+        for analysis in analyses:
+            domain = analysis.domain.strip()
+            domains[domain] = domains.get(domain, 0) + 1
+            for tag in analysis.tags:
+                cleaned = tag.strip()
+                if cleaned and cleaned.casefold() not in {item.casefold() for item in tags}:
+                    tags.append(cleaned[:80])
+            for section in analysis.sections:
+                start = min(page_limit, max(1, section.page_start))
+                end = min(page_limit, max(start, section.page_end))
+                key = (section.title.casefold(), start, end)
+                if key not in section_keys:
+                    section_keys.add(key)
+                    sections.append(section.model_copy(update={"page_start": start, "page_end": end}))
+        domain = max(domains, key=domains.get)
+        return DocumentAnalysis(title=first.title, domain=domain, tags=tags[:20], sections=sections[:30])
+
+    def _analyze_document_batch(self, filename: str, page_start: int, page_end: int,
+                                text: str) -> DocumentAnalysis:
+        prompt = f"""Analyze this parsed source text for a knowledge graph.
+Use only information supported by the supplied text. Create a concise descriptive title,
+choose its most useful academic or practical domain, generate up to 20 specific search tags,
+and identify its meaningful sections with short summaries and one-based source page ranges.
+For a partial page segment, report the section represented by this segment and use the page
+number shown below. Do not make up headings or facts. Return strict JSON with keys:
+title, domain, tags, sections. Each section has title, summary, page_start, page_end.
+
+Filename: {filename}
+Parsed page range: {page_start}-{page_end}
+SOURCE TEXT:
+{text}"""
+        try:
+            response = self._get_client().models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config={"response_mime_type": "application/json"},
+            )
+            if not response.text:
+                raise ValueError("empty model response")
+            return DocumentAnalysis.model_validate(json.loads(response.text))
+        except (ValidationError, json.JSONDecodeError, ValueError) as exc:
+            raise GeminiClientError(f"Gemini returned invalid document analysis: {exc}") from exc
+        except Exception as exc:
+            raise GeminiClientError(f"Gemini document analysis request failed: {exc}") from exc
 
     def assess_url_connection(self, url_a: str, url_b: str, *, max_chars_per_page: int = 12000
                               ) -> ConnectionAssessment:

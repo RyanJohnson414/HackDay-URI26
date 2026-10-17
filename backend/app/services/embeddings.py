@@ -6,6 +6,7 @@ from typing import Sequence
 
 from app.core.config import get_settings
 from app.services.chunking import TextChunk
+from app.services.genai_provider import create_genai_client
 
 
 class EmbeddingError(RuntimeError):
@@ -30,8 +31,7 @@ class EmbeddingService:
             if not settings.gemini_api_key:
                 raise EmbeddingError("GEMINI_API_KEY is required to create embeddings")
             try:
-                from google import genai
-                self._client = genai.Client(api_key=settings.gemini_api_key)
+                self._client = create_genai_client(settings.gemini_api_key)
             except Exception as exc:
                 raise EmbeddingError(f"Could not initialize embedding client: {exc}") from exc
         return self._client

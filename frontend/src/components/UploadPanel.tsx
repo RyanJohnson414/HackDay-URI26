@@ -4,6 +4,7 @@ import type { IngestionResponse } from "../types";
 
 export default function UploadPanel({ onComplete }: { onComplete: (result: IngestionResponse) => void }) {
   const [url, setUrl] = useState("");
+  const [selectedFile, setSelectedFile] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -11,12 +12,16 @@ export default function UploadPanel({ onComplete }: { onComplete: (result: Inges
     event.preventDefault();
     const input = event.currentTarget.elements.namedItem("document") as HTMLInputElement;
     const file = input.files?.[0];
-    if (!file) return;
+    if (!file) {
+      setError("Choose a PDF, CSV, TSV, or text file first.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const result = await uploadDocument(file);
       input.value = "";
+      setSelectedFile("");
       onComplete(result);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Upload failed");
@@ -48,10 +53,11 @@ export default function UploadPanel({ onComplete }: { onComplete: (result: Inges
       </div></div>
       <form className="file-form" onSubmit={submitFile}>
         <label className="file-picker">
-          <input name="document" type="file" accept=".pdf,.txt,.text,application/pdf,text/plain" disabled={busy} />
-          <span>Choose a file</span>
+          <input name="document" type="file" accept=".pdf,.txt,.text,.md,.markdown,.csv,.tsv,.tab,application/pdf,text/plain,text/markdown,text/csv,text/tab-separated-values" disabled={busy}
+            onChange={(event) => { setSelectedFile(event.target.files?.[0]?.name || ""); setError(""); }} />
+          <span>{selectedFile || "Choose a source file"}</span>
         </label>
-        <button className="button button-dark" disabled={busy}>Upload</button>
+        <button className="button button-dark" disabled={busy || !selectedFile}>{busy ? "Analyzing…" : "Upload file"}</button>
       </form>
       <div className="form-divider"><span />or add a URL<span /></div>
       <form className="url-form" onSubmit={submitUrl}>

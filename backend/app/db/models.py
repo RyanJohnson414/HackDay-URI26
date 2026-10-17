@@ -28,6 +28,7 @@ class Document(Base):
     title: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     domain: Mapped[str] = mapped_column(String(256), nullable=False, default="Uncategorized")
     tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    sections: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
     media_type: Mapped[str] = mapped_column(String(128), nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")

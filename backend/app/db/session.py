@@ -6,8 +6,18 @@ from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import get_settings
+from app.core.config import BACKEND_DIR, get_settings
 from app.db.models import Base
+
+
+def _resolve_database_url(database_url: str) -> str:
+    url = make_url(database_url)
+    if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
+        database_path = Path(url.database).expanduser()
+        if not database_path.is_absolute():
+            database_path = BACKEND_DIR / database_path
+        return url.set(database=str(database_path.resolve())).render_as_string(hide_password=False)
+    return database_url
 
 
 def _engine_options(database_url: str) -> dict:
@@ -19,9 +29,10 @@ def _engine_options(database_url: str) -> dict:
     return {}
 
 
-DATABASE_URL = get_settings().database_url
+DATABASE_URL = _resolve_database_url(get_settings().database_url)
 engine = create_engine(DATABASE_URL, future=True, **_engine_options(DATABASE_URL))
 if make_url(DATABASE_URL).get_backend_name() == "sqlite":
+
     @event.listens_for(engine, "connect")
     def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
         cursor = dbapi_connection.cursor()
@@ -46,6 +57,8 @@ def init_db() -> None:
                 )
             if "tags" not in columns:
                 connection.exec_driver_sql("ALTER TABLE documents ADD COLUMN tags JSON NOT NULL DEFAULT '[]'")
+            if "sections" not in columns:
+                connection.exec_driver_sql("ALTER TABLE documents ADD COLUMN sections JSON NOT NULL DEFAULT '[]'")
 
 
 def get_db():

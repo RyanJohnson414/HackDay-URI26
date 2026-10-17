@@ -97,6 +97,7 @@ def rebuild_topics(session: Session, *, topic_similarity: float = 0.72,
     session.flush()
     session.query(Topic).delete(synchronize_session=False)
     topic_rows: list[Topic] = []
+    chunk_assignments: list[tuple[Chunk, str]] = []
     for group in groups.values():
         members = sorted(group, key=lambda chunk: chunk.id)
         centroid = [sum(chunk.embedding[index] for chunk in members) / len(members)
@@ -107,7 +108,10 @@ def rebuild_topics(session: Session, *, topic_similarity: float = 0.72,
         topic_rows.append(topic)
         session.add(topic)
         for chunk in members:
-            chunk.topic_id = topic_id
+            chunk_assignments.append((chunk, topic_id))
+    session.flush()
+    for chunk, topic_id in chunk_assignments:
+        chunk.topic_id = topic_id
     session.flush()
 
     relation_count = 0

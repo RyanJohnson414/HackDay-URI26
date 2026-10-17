@@ -52,6 +52,7 @@ def get_graph(session: Session = Depends(get_db)):
         documents=[DocumentResponse(
             id=document.id, filename=document.filename, media_type=document.media_type,
             title=document.title, domain=document.domain, tags=document.tags,
+            sections=document.sections,
             source_url=document.source_url, status=document.status, error=document.error,
             created_at=document.created_at,
             chunk_count=sum(chunk.document_id == document.id for chunk in chunks),

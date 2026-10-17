@@ -4,12 +4,20 @@ export interface DocumentRecord {
   title: string;
   domain: string;
   tags: string[];
+  sections: DocumentSection[];
   media_type: string;
   source_url: string | null;
   status: string;
   error: string | null;
   created_at: string;
   chunk_count: number;
+}
+
+export interface DocumentSection {
+  title: string;
+  summary: string;
+  page_start: number;
+  page_end: number;
 }
 
 export interface GraphChunk {
@@ -64,6 +72,14 @@ export interface GraphResponse {
   topics: GraphTopic[];
   related_topics: TopicLink[];
 }
+
+export const emptyGraph: GraphResponse = {
+  documents: [],
+  chunks: [],
+  connections: [],
+  topics: [],
+  related_topics: [],
+};
 
 export interface IngestionResponse {
   document: DocumentRecord;

@@ -14,12 +14,14 @@ from fastapi import FastAPI  # type: ignore[reportMissingImports]
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore[reportMissingImports]
 
 from app.api.routes import discoveries, documents, graph
+from app.db.seed import seed_example_data
 from app.db.session import init_db
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    seed_example_data()
     yield
 
 

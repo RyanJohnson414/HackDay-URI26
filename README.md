@@ -1,7 +1,8 @@
-# HackDay-URI26
+# Consilience
 
-An AI-powered knowledge graph for finding useful connections across documents
-from different fields.
+Consilience means the convergence of knowledge across different fields. This
+AI-powered knowledge graph finds useful connections across your documents and
+surfaces ideas that bridge disciplines.
 
 ## MVP structure
 
@@ -66,6 +67,22 @@ If the `venv` creation command reports that `ensurepip` is unavailable, install
 the matching `python3-venv` system package first. Each new terminal needs the
 `source .venv/bin/activate` command before running the backend.
 
+## Database and graph API
+
+The default database is `backend/knowledge_graph.db`. Relative SQLite paths in
+`DATABASE_URL` are resolved from the backend directory, regardless of the
+directory from which the server is launched. FastAPI creates the database
+tables during application startup (`app.main` lifespan); no separate
+migration/setup command is required for a new local database.
+
+The frontend requests `GET /api/graph`; Vite proxies `/api` to the backend at
+`http://127.0.0.1:8000`. The graph response is read from the SQLite documents,
+chunks, topic, and connection tables. Ingesting a new source persists its
+passages, discovers cross-document links, and refreshes the graph response.
+On a new empty database, startup inserts two clearly tagged starter examples
+into SQLite so the graph loads from the same API and database as user sources.
+The frontend labels this starter data; it does not substitute an in-memory graph.
+
 ## Gemini configuration
 
 Copy `backend/.env.example` to `backend/.env` and add your Gemini API key
@@ -75,8 +92,11 @@ commit the key.
 
 ## Intended request flow
 
-1. Upload a PDF, text file, or pasted notes.
-2. Parse and chunk the source text, then create embeddings.
-3. Compare chunks across documents and ask the configured Gemma model to assess
-   and explain promising cross-disciplinary connections.
-4. Return source passages and connections for the graph and discovery feed.
+1. Add a PDF, CSV/TSV, text/Markdown file, public web URL, or pasted note.
+2. Extract the full text through the document parser, then ask the configured
+   `GEMINI_MODEL` to generate grounded titles, domains, tags, and page-based
+   section summaries.
+3. Chunk and embed the parsed source, compare chunks across documents, and ask
+   that same configured model to assess and explain promising connections.
+4. Persist source metadata, sections, passages, vectors, topics, and connections
+   in SQLite and return them through the graph API.

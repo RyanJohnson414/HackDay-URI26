@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent, type WheelEvent } from "react";
-import { createNote, fetchGraph, summarizeTopic } from "../api/client";
-import { sampleGraph } from "../App";
-import type { DocumentRecord, GraphChunk, GraphConnection, GraphResponse, GraphTopic } from "../types";
+import { createNote, fetchGraph, ingestUrl, summarizeTopic, uploadDocument } from "../api/client";
+import { emptyGraph, type DocumentRecord, type GraphChunk, type GraphConnection, type GraphResponse, type GraphTopic } from "../types";
 import "../network.css";
 
 type NodeKind = "domain" | "topic" | "document" | "chunk";
@@ -218,26 +217,60 @@ function buildLayout(graph: GraphResponse): Layout {
   return { nodes, links };
 }
 
-function curvedPath(source: ViewNode, target: ViewNode, offset = 48): string {
+function nodeEdgeRadius(node: ViewNode, transformScale: number): number {
+  if (node.kind === "domain") return 26;
+  if (node.kind === "topic") return 22;
+  if (node.kind === "document") return transformScale < 0.48 ? 3.2 : transformScale < 0.8 ? 4.5 : 6.2;
+  return transformScale < 0.5 ? 2.2 : transformScale < 0.9 ? 3 : 4.2;
+}
+
+function curvedPath(source: ViewNode, target: ViewNode, offset = 48, scale = 1): string {
   const dx = target.x - source.x;
   const dy = target.y - source.y;
   const length = Math.max(Math.hypot(dx, dy), 1);
   const middleX = (source.x + target.x) / 2 - dy / length * offset;
   const middleY = (source.y + target.y) / 2 + dx / length * offset;
-  return `M ${source.x} ${source.y} Q ${middleX} ${middleY} ${target.x} ${target.y}`;
+  // Trim the quadratic at both ends so bridge strokes meet the node outlines.
+  const sourceRadius = nodeEdgeRadius(source, scale);
+  const targetRadius = nodeEdgeRadius(target, scale);
+  const sourceTangentLength = Math.max(Math.hypot(middleX - source.x, middleY - source.y), 1);
+  const targetTangentLength = Math.max(Math.hypot(target.x - middleX, target.y - middleY), 1);
+  const startX = source.x + (middleX - source.x) / sourceTangentLength * sourceRadius;
+  const startY = source.y + (middleY - source.y) / sourceTangentLength * sourceRadius;
+  const endX = target.x - (target.x - middleX) / targetTangentLength * targetRadius;
+  const endY = target.y - (target.y - middleY) / targetTangentLength * targetRadius;
+  return `M ${startX} ${startY} Q ${middleX} ${middleY} ${endX} ${endY}`;
+}
+
+function straightPath(source: ViewNode, target: ViewNode, scale: number, inset = 0): string {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const length = Math.max(Math.hypot(dx, dy), 1);
+  const sourceRadius = nodeEdgeRadius(source, scale) + inset;
+  const targetRadius = nodeEdgeRadius(target, scale) + inset;
+  return `M ${source.x + dx / length * sourceRadius} ${source.y + dy / length * sourceRadius} L ${target.x - dx / length * targetRadius} ${target.y - dy / length * targetRadius}`;
+}
+
+function strengthColor(strength: number, amount: number): string {
+  const pale = [225, 145, 139];
+  const strong = [151, 17, 17];
+  return `#${pale.map((start, index) => Math.round(start + (strong[index] - start) * strength * amount)
+    .toString(16).padStart(2, "0")).join("")}`;
 }
 
 export default function NetworkView() {
   const embedded = new URLSearchParams(window.location.search).has("embedded");
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem("hauri-theme") === "dark");
-  const [graph, setGraph] = useState<GraphResponse>(sampleGraph);
-  const [isSample, setIsSample] = useState(true);
+  const [graph, setGraph] = useState<GraphResponse>(emptyGraph);
+  const [backendConnected, setBackendConnected] = useState(false);
   const [bridgesVisible, setBridgesVisible] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedRelation, setSelectedRelation] = useState<TopicBridge | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 0.82 });
   const [modalOpen, setModalOpen] = useState(false);
+  const [sourceMode, setSourceMode] = useState<"file" | "url" | "note">("file");
+  const [sourceError, setSourceError] = useState("");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [topicSummary, setTopicSummary] = useState<{ topicId: string; text: string; points: string[]; sources: number } | null>(null);
@@ -250,17 +283,20 @@ export default function NetworkView() {
       const result = await fetchGraph();
       if (result.documents.length || result.topics.length || result.chunks.length) {
         setGraph(result);
-        setIsSample(false);
-        setNotice("");
+        setBackendConnected(true);
+        setNotice(result.documents.length > 0 && result.documents.every((document) =>
+          document.tags.includes("starter-example"))
+          ? "Starter example data is loaded from SQLite. Add a source to extend it."
+          : "");
       } else {
-        setGraph(sampleGraph);
-        setIsSample(true);
-        setNotice("No SQLite graph data yet. Showing a sample network.");
+        setGraph(result);
+        setBackendConnected(true);
+        setNotice("No sources are stored yet. Upload a file or add a note to build your graph.");
       }
     } catch {
-      setGraph(sampleGraph);
-      setIsSample(true);
-      setNotice("Backend is offline. Showing a sample network.");
+      setGraph(emptyGraph);
+      setBackendConnected(false);
+      setNotice("Backend is offline. Start the backend to load your SQLite graph.");
     }
   }, []);
 
@@ -319,7 +355,8 @@ export default function NetworkView() {
     return () => { active = false; };
   }, [embedded, summaryTopicId]);
   const visibleLinks = layout.links.filter((link) => {
-    if (link.kind === "hierarchy") return false;
+    if (link.kind === "hierarchy" && link.lod === "document" && transform.scale < 0.92) return false;
+    if (link.kind === "hierarchy" && link.lod === "chunk" && transform.scale < 1.18) return false;
     if (!bridgesVisible && link.crossTopic) return false;
     if (link.lod === "document" && transform.scale < 0.92) return false;
     if (link.lod === "chunk" && transform.scale < 1.18) return false;
@@ -366,23 +403,28 @@ export default function NetworkView() {
     }));
   }
 
-  async function submitNote(event: FormEvent<HTMLFormElement>) {
+  async function submitSource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     setSaving(true);
+    setSourceError("");
     setNotice("");
     try {
-      const result = await createNote({
-        title: String(form.get("title") || "").trim(),
-        domain: String(form.get("domain") || "").trim(),
-        content: String(form.get("content") || "").trim(),
-        tags: String(form.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean),
-      });
+      const result = sourceMode === "file"
+        ? await uploadDocument(form.get("file") as File)
+        : sourceMode === "url"
+          ? await ingestUrl(String(form.get("url") || "").trim())
+          : await createNote({
+            title: String(form.get("title") || "").trim(),
+            domain: String(form.get("domain") || "").trim(),
+            content: String(form.get("content") || "").trim(),
+            tags: String(form.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean),
+          });
       setModalOpen(false);
       await refresh();
       setNotice(`Added "${result.document.title}" to the SQLite graph.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not add source.");
+      setSourceError(error instanceof Error ? error.message : "Could not add source.");
     } finally {
       setSaving(false);
     }
@@ -421,9 +463,9 @@ export default function NetworkView() {
   return (
     <main className={`network-shell${embedded ? " embedded" : ""}`}>
       <header className="network-topbar">
-        <div className="network-brand"><span className="network-mark">H</span><span>HAURI <i>/</i> NETWORK</span></div>
+        <div className="network-brand"><span className="network-mark">C</span><span>CONSILIENCE <i>/</i> NETWORK</span></div>
         <div className="network-actions">
-          <span className="network-source-status"><b />{isSample ? "SAMPLE DATA" : "SQLITE GRAPH"}</span>
+          <span className="network-source-status"><b />{backendConnected ? "SQLITE GRAPH" : "BACKEND OFFLINE"}</span>
           <button className={`network-toggle${bridgesVisible ? " active" : ""}`} onClick={() => setBridgesVisible((visible) => !visible)}>
             <span className="toggle-icon">||</span> Topic bridges <span className="toggle-state">{bridgesVisible ? "ON" : "OFF"}</span>
           </button>
@@ -472,10 +514,16 @@ export default function NetworkView() {
             const isBridge = link.kind === "bridge";
             const color = link.kind === "hierarchy" || link.kind === "local" ? PALETTE.local :
               link.kind === "bridge" ? PALETTE.bridge : PALETTE.muted;
-            const d = isBridge ? curvedPath(source, target, 58) : `M ${source.x} ${source.y} L ${target.x} ${target.y}`;
+            const isGreenLink = link.kind === "hierarchy" || link.kind === "local";
+            const d = isBridge ? curvedPath(source, target, 58, transform.scale)
+              : straightPath(source, target, transform.scale, isGreenLink ? 6 : 0);
             const score = link.relation?.similarity ?? link.weight;
             const scoreX = (source.x + target.x) / 2;
             const scoreY = (source.y + target.y) / 2 - (isBridge ? 28 : 10);
+            const strength = Math.max(0, Math.min(1, link.weight ?? link.relation?.similarity ?? 0));
+            const bridgeWidth = 1.8 + strength * 1.8
+              + Math.min(0.45, Math.log2(1 + (link.relation?.connections.length || 0)) * 0.15);
+            const gradientId = `bridge-gradient-${link.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
             return <g key={link.id} opacity={opacity} data-network-relation={link.relation ? "true" : undefined}
               className={link.relation ? "topic-bridge-link" : undefined}
               onClick={(event) => {
@@ -483,11 +531,18 @@ export default function NetworkView() {
                 event.stopPropagation();
                 setSelectedRelation(link.relation);
               }}>
+              {isBridge && <defs><linearGradient id={gradientId} x1={source.x} y1={source.y} x2={target.x} y2={target.y} gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor={strengthColor(strength, 0.68)} stopOpacity={0.68 + strength * 0.2} />
+                <stop offset="100%" stopColor={strengthColor(strength, 1)} stopOpacity={0.78 + strength * 0.2} />
+              </linearGradient></defs>}
               <path d={d} className={isBridge ? "network-bridge-line" : undefined}
-                stroke={color} strokeWidth={link.kind === "hierarchy" ? 2 : isBridge ? 4.2 : link.kind === "local" ? 3.4 : 2.5}
+                stroke={isBridge ? `url(#${gradientId})` : color}
+                strokeWidth={isGreenLink ? 0.8 : isBridge ? bridgeWidth : 2.5}
                 opacity={link.kind === "hierarchy" ? 0.9 : 1} fill="none"
                 filter={isBridge && focused ? "url(#bridge-glow)" : undefined}>
-                <title>{link.title || (link.kind === "hierarchy" ? "Topic hierarchy" : "Local relationship")}</title>
+                <title>{link.relation
+                  ? `${link.title}: ${link.relation.connections.length} verified connection${link.relation.connections.length === 1 ? "" : "s"}`
+                  : link.title || (link.kind === "hierarchy" ? "Topic hierarchy" : "Local relationship")}</title>
               </path>
               {link.kind !== "hierarchy" && score !== undefined && <text x={scoreX} y={scoreY}
                 className="network-link-score" textAnchor="middle">{score.toFixed(2)}</text>}
@@ -607,7 +662,7 @@ export default function NetworkView() {
         <button onClick={() => setTransform({ x: 0, y: 0, scale: 0.82 })} aria-label="Reset view">R</button>
       </div>
 
-      <button className="add-source-button" onClick={() => setModalOpen(true)}><span>+</span> ADD SOURCE</button>
+      <button className="add-source-button" onClick={() => { setSourceError(""); setModalOpen(true); }}><span>+</span> ADD SOURCE</button>
 
       <aside className={`inspector${selectedNode ? " open" : ""}`}>
         <div className="inspector-top">
@@ -628,6 +683,13 @@ export default function NetworkView() {
               <p>{selectedNode.document.domain} / {selectedNode.document.filename}</p>
               {selectedNode.chunk && <p>Page {selectedNode.chunk.page_number} / characters {selectedNode.chunk.start_char}-{selectedNode.chunk.end_char}</p>}
               <div className="inspector-tags">{selectedNode.document.tags.map((tag) => <i key={tag}>{tag}</i>)}</div>
+              {!!selectedNode.document.sections.length && <div className="document-sections">
+                <small>GEMINI SECTIONS</small>
+                {selectedNode.document.sections.map((section) => <article key={`${section.title}-${section.page_start}`}>
+                  <b>{section.title}</b><span>Pages {section.page_start}-{section.page_end}</span>
+                  <p>{section.summary}</p>
+                </article>)}
+              </div>}
               {selectedNode.document.source_url && <a href={selectedNode.document.source_url} target="_blank" rel="noreferrer">Open source -&gt;</a>}
             </div>
             <div className="inspector-section"><span>PASSAGE PREVIEW</span>
@@ -656,15 +718,29 @@ export default function NetworkView() {
       </aside>
 
       {modalOpen && <div className="source-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setModalOpen(false); }}>
-        <form className="source-modal" onSubmit={submitNote}>
+        <form className="source-modal" onSubmit={submitSource}>
           <div className="modal-top"><div><span>ADD TO YOUR NETWORK</span><h2>New source</h2></div>
             <button type="button" onClick={() => setModalOpen(false)} aria-label="Close">X</button></div>
-          <label>Title<input name="title" required maxLength={512} placeholder="e.g. Adaptive systems in nature" /></label>
-          <label>Domain<input name="domain" required maxLength={256} placeholder="e.g. Biology, Economics, Design" /></label>
-          <label>Content<textarea name="content" required maxLength={200000} rows={6} placeholder="Add the note or passage you want connected..." /></label>
-          <label>Tags <small>COMMA SEPARATED</small><input name="tags" placeholder="systems, adaptation, networks" /></label>
+          <div className="source-mode-tabs" role="tablist" aria-label="Source type">
+            {(["file", "url", "note"] as const).map((mode) => <button key={mode} type="button"
+              role="tab" aria-selected={sourceMode === mode} className={sourceMode === mode ? "active" : ""}
+              onClick={() => { setSourceMode(mode); setSourceError(""); }}>{mode === "file" ? "Upload file" : mode === "url" ? "Web URL" : "Paste note"}</button>)}
+          </div>
+          {sourceMode === "file" && <label>PDF, CSV, TSV, or text file
+            <input key={sourceMode} name="file" type="file" required accept=".pdf,.txt,.text,.md,.markdown,.csv,.tsv,.tab,application/pdf,text/plain,text/markdown,text/csv,text/tab-separated-values" />
+          </label>}
+          {sourceMode === "url" && <label>Public web page URL
+            <input key={sourceMode} name="url" type="url" required placeholder="https://example.com/article" />
+          </label>}
+          {sourceMode === "note" && <>
+            <label>Title<input name="title" required maxLength={512} placeholder="e.g. Adaptive systems in nature" /></label>
+            <label>Domain<input name="domain" required maxLength={256} placeholder="e.g. Biology, Economics, Design" /></label>
+            <label>Content<textarea name="content" required maxLength={200000} rows={6} placeholder="Add the note or passage you want connected..." /></label>
+            <label>Tags <small>OPTIONAL</small><input name="tags" placeholder="Gemini will add suggested tags" /></label>
+          </>}
+          {sourceError && <p className="form-error" role="alert">{sourceError}</p>}
           <div className="modal-footer"><p>Stored in your local SQLite graph.</p>
-            <button type="submit" disabled={saving}>{saving ? "ADDING..." : "ADD SOURCE ->"}</button></div>
+            <button type="submit" disabled={saving}>{saving ? "READING + ANALYZING..." : "ADD SOURCE ->"}</button></div>
         </form>
       </div>}
     </main>

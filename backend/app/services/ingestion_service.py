@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from app.services.chunking import TextChunk, chunk_document
 from app.services.connection_engine import ConnectionEngine
 from app.services.document_parser import DocumentParseError, ParsedDocument, ParsedPage, parse_document
 from app.services.embeddings import EmbeddedChunk, EmbeddingService
+from app.services.gemini_client import GeminiClient
 from app.services.topic_service import rebuild_topics
 from app.services.webpage_reader import WebPageReadError, fetch_webpage
 
@@ -31,9 +33,11 @@ class IngestionService:
     """Coordinate services and database writes without changing their algorithms."""
 
     def __init__(self, *, embedder: EmbeddingService | None = None,
-                 connection_engine: ConnectionEngine | None = None):
+                 connection_engine: ConnectionEngine | None = None,
+                 gemini_client: GeminiClient | None = None):
+        self.gemini = gemini_client or GeminiClient()
         self.embedder = embedder or EmbeddingService()
-        self.connection_engine = connection_engine or ConnectionEngine()
+        self.connection_engine = connection_engine or ConnectionEngine(gemini_client=self.gemini)
 
     def ingest_upload(self, session: Session, *, filename: str, content_type: str,
                       data: bytes) -> IngestionResult:
@@ -59,11 +63,17 @@ class IngestionService:
         except WebPageReadError as exc:
             self._mark_failed(session, document, str(exc))
             raise
+        try:
+            parsed = parse_document(page.text.encode("utf-8"), filename=page.title or page.url,
+                                    content_type="text/plain")
+        except DocumentParseError as exc:
+            self._mark_failed(session, document, str(exc))
+            raise
+        parsed = replace(parsed, media_type=page.document.media_type, source_url=page.url)
         document.filename = page.title or page.url
         document.source_url = page.url
-        document.media_type = page.document.media_type
         document.title = (page.title or page.url)[:512]
-        return self._complete(session, document, page.document)
+        return self._complete(session, document, parsed)
 
     def ingest_note(self, session: Session, *, title: str, domain: str, content: str,
                     tags: list[str]) -> IngestionResult:
@@ -75,12 +85,23 @@ class IngestionService:
         session.commit()
         parsed = ParsedDocument(filename=filename, media_type="text/plain",
                                 pages=(ParsedPage(1, content.strip()),))
-        return self._complete(session, document, parsed)
+        return self._complete(session, document, parsed, preserve_metadata=True)
 
     def _complete(self, session: Session, document: Document,
-                  parsed: ParsedDocument) -> IngestionResult:
+                  parsed: ParsedDocument, *, preserve_metadata: bool = False) -> IngestionResult:
         warnings: list[str] = []
         try:
+            analysis = self.gemini.analyze_document(
+                parsed.filename, [(page.page_number, page.text) for page in parsed.pages]
+            )
+            if not preserve_metadata:
+                document.title = analysis.title[:512]
+                document.domain = analysis.domain[:256]
+            document.tags = list(dict.fromkeys([
+                *(tag.strip() for tag in (document.tags or []) if tag.strip()),
+                *(tag.strip() for tag in analysis.tags if tag.strip()),
+            ]))[:20]
+            document.sections = [section.model_dump() for section in analysis.sections]
             chunks = chunk_document(parsed, document.id)
             if not chunks:
                 raise ValueError("Document produced no text chunks")

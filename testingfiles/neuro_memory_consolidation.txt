@@ -1,0 +1,4 @@
+Topic: Neuroscience - Memory Consolidation
+Memory consolidation is a category of processes that stabilize a memory trace after its initial acquisition.
+Synaptic consolidation occurs within the first few hours after learning or encoding, whereas systems consolidation
+reorganizes brain networks across hippocampus and neocortex over weeks or years, optimizing long-term information retention.

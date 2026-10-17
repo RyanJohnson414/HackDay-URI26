@@ -3,6 +3,13 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 
+class DocumentSectionResponse(BaseModel):
+    title: str
+    summary: str
+    page_start: int
+    page_end: int
+
+
 class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -11,6 +18,7 @@ class DocumentResponse(BaseModel):
     title: str
     domain: str
     tags: list[str]
+    sections: list[DocumentSectionResponse] = Field(default_factory=list)
     media_type: str
     source_url: str | None
     status: str

@@ -1,0 +1,4 @@
+Topic: Economics - Resource Allocation and Scarcity
+Economic systems resolve the fundamental problem of allocating scarce resources among competing uses.
+Through market price mechanisms and priority queues, resources are rationed dynamically. Information signaling
+determines production, storage, and distribution trade-offs across market participants.

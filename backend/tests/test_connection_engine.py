@@ -63,7 +63,7 @@ def test_ignores_same_document_and_below_threshold_pairs():
 
 
 def test_connection_has_real_cross_document_references_and_blended_weight():
-    gemini = FakeGemini([assessment(strength=0.75)])
+    gemini = FakeGemini([assessment(strength=0.8)])
     engine = ConnectionEngine(gemini_client=gemini)
     left = embedded("chunk-a", "doc-a", [1, 0])
     right = embedded("chunk-b", "doc-b", [0.8, 0.6])
@@ -77,7 +77,20 @@ def test_connection_has_real_cross_document_references_and_blended_weight():
     assert connection.source.document_id != connection.target.document_id
     assert (connection.source.page_number, connection.source.start_char, connection.source.end_char) == (2, 10, 25)
     assert connection.similarity == pytest.approx(0.8)
-    assert connection.weight == pytest.approx(0.4 * 0.8 + 0.6 * 0.75)
+    assert connection.weight == pytest.approx(0.4 * 0.8 + 0.6 * 0.8)
+
+
+def test_connection_requires_gemini_strength_strictly_above_point_seventy_five():
+    gemini = FakeGemini([assessment(strength=0.75)])
+    engine = ConnectionEngine(gemini_client=gemini)
+
+    result = engine.find_connections(
+        [embedded("a", "doc-a", [1, 0]), embedded("b", "doc-b", [0.8, 0.6])],
+        similarity_threshold=0.7,
+    )
+
+    assert result == []
+    assert len(gemini.calls) == 1
 
 
 def test_irrelevant_model_assessments_are_not_returned():
@@ -99,7 +112,7 @@ def test_candidate_and_result_limits_are_respected():
     chunks = [
         embedded("a", "doc-a", [1, 0]),
         embedded("b", "doc-b", [0.9, 0.435889894]),
-        embedded("c", "doc-c", [0.8, 0.6]),
+        embedded("c", "doc-c", [0.8, -0.6]),
     ]
 
     result = engine.find_connections(chunks, similarity_threshold=0.7, max_candidates=2, max_connections=1)
@@ -108,6 +121,21 @@ def test_candidate_and_result_limits_are_respected():
     assert len(result) == 1
     assert result[0].target.chunk_id == "c"
     assert result[0].weight == pytest.approx(0.4 * 0.8 + 0.6 * 0.9)
+
+
+def test_default_limits_allow_more_than_forty_candidates_and_twenty_connections():
+    pair_count = 55
+    gemini = FakeGemini([assessment() for _ in range(pair_count)])
+    engine = ConnectionEngine(gemini_client=gemini)
+    chunks = [
+        embedded(f"chunk-{index}", f"doc-{index}", [1, 0])
+        for index in range(11)
+    ]
+
+    result = engine.find_connections(chunks)
+
+    assert len(gemini.calls) == pair_count
+    assert len(result) == 50
 
 
 def test_invalid_vector_dimensions_are_reported_as_engine_errors():
