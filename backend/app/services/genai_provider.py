@@ -12,7 +12,9 @@ def create_genai_client(api_key: str):
     from google.genai import types
 
     http_options = types.HttpOptions(
+        timeout=30_000,
         client_args={"trust_env": False},
         async_client_args={"trust_env": False},
+        retry_options=types.HttpRetryOptions(attempts=1),
     )
     return genai.Client(api_key=api_key, http_options=http_options)

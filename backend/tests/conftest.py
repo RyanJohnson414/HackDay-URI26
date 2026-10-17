@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import session as db_session
 from app.db.models import Base
-from app import main as main_app
 from app.main import app
 
 
@@ -32,7 +31,7 @@ def test_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def api_client(test_engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
-    monkeypatch.setattr(main_app, "load_context_sources", lambda: None)
+    Base.metadata.create_all(bind=test_engine)
     test_session = sessionmaker(bind=test_engine, autoflush=False, expire_on_commit=False, class_=Session)
 
     def override_get_db():

@@ -4,8 +4,8 @@ Consilience is a local-first knowledge graph for exploring how ideas in
 different documents relate. Add notes, files, or public web pages; the backend
 extracts and analyzes their text, groups similar passages into topics, and asks
 the configured Gemini model (Gemma by default) to check possible links between
-sources. The resulting graph is stored in SQLite and displayed by a React
-website.
+sources. The website stores the resulting graph in local JSON and source files,
+then displays it in a React network view. Website uploads do not write to SQLite.
 
 The app does not have a prewritten list of expected connections. A connection
 is created only after the model assesses two real passages and the result
@@ -25,7 +25,7 @@ related.
    catalog.
 3. **Split and embed passages.** Text is divided into chunks of about 1,200
    characters, with up to 180 characters of overlap. Each chunk is sent to the
-   configured embedding model and stored with its vector and source location.
+   configured embedding model and stored locally with its vector and source location.
    Overlap helps keep ideas near chunk boundaries available to later steps.
 4. **Build topic groups.** The backend compares chunk vectors throughout the
    stored corpus. Similar chunks are grouped, then named from a document title
@@ -36,9 +36,9 @@ related.
    model for a grounded relatedness assessment. The assessment includes an
    explanation and short supporting quotes when available.
 6. **Persist and display.** Documents, chunks, embeddings, topics, topic
-   relations, and accepted connections are stored in SQLite. The frontend reads
-   the graph through the backend API; it does not calculate the persisted link
-   scores itself.
+   relations, and accepted connections are stored in a local JSON graph file.
+   Uploaded originals are kept in a local folder. The frontend reads the graph
+   through the backend API; it does not calculate link scores itself.
 
 ## How the math works
 
@@ -244,39 +244,36 @@ connection assessment.
 
 ## Where source data goes
 
-The graph database is local by default (`backend/knowledge_graph.db`), and the
-website talks to the local backend. However, this is not an offline-only
+The graph and uploaded source files stay on this machine, and the website talks
+to the local backend. However, this is not an offline-only
 application: source text is sent to the configured Gemini API for document
 analysis and embeddings, and passage text plus document context is sent for
 connection assessment. Do not submit material unless using that provider is
-appropriate for it. The database stores the extracted text, source metadata,
-embeddings, and assessed connection explanations/evidence on this machine.
+appropriate for it. The local JSON graph stores extracted text, source metadata,
+embeddings, and assessed connection explanations/evidence.
 
-## SQLite, startup sources, and API
+## Local demo files and API
 
-The default database is `backend/knowledge_graph.db`. Relative SQLite paths in
-`DATABASE_URL` are resolved from the backend directory. On startup, the backend
-initializes the schema and applies additive SQLite migrations; existing source
-records are not wiped for these migrations.
+The website's graph is stored in `backend/local_demo_state.json`, and uploaded
+files are copied to `backend/local_demo_sources/`. Both are local to the machine
+and ignored by Git. The checked-in `backend/local_demo_seed.json` provides the
+initial demo graph. The website backend does not initialize or write to
+`knowledge_graph.db`.
 
-The folder `backend/context_check_sources/` contains plain prose fixtures used
-to exercise the real ingestion pipeline. They contain no predefined topics,
-connections, labels, or scores. After the API starts, the backend processes
-these files in the background, so a slow model provider does not block the
-website from connecting. Successfully ingested fixture files are skipped on
-later starts; failed or partial ones are retried. Provider failures are logged
-and do not prevent the backend from serving requests.
+Source uploads still run through the configured document parser, embedding
+model, topic grouping, and Gemma connection checks. The JSON store keeps the
+resulting vectors and evidence so later uploads can be compared against the
+same local corpus. File uploads are limited to 10 MB for the demo.
 
 Useful endpoints:
 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /health` | Check that the backend is responding |
-| `GET /api/graph` | Load the documents, chunks, topics, and connections |
-| `GET /api/documents` | List ingested documents and their processing status |
-| `POST /api/documents/upload` | Upload a supported file |
-| `POST /api/documents/url` | Ingest a public web URL |
-| `POST /api/documents/note` | Ingest a pasted note |
+| `GET /api/local/graph` | Load the local JSON graph used by the website |
+| `POST /api/local/documents/upload` | Save and analyze a supported file locally |
+| `POST /api/local/documents/url` | Fetch, analyze, and save a public web page locally |
+| `POST /api/local/documents/note` | Analyze and save a pasted note locally |
 
 The interactive API documentation is available at `http://127.0.0.1:8000/docs`
 when the backend is running.
@@ -288,9 +285,10 @@ backend/
   app/
     api/                 HTTP routes and graph serialization
     core/                Environment and application settings
-    db/                  SQLite models, sessions, and migrations
+    db/                  Legacy SQLite models and session helpers
+    services/local_demo_store.py  Local JSON graph and source file store
     services/             Parsing, chunking, embeddings, Gemini, grouping, links
-  context_check_sources/  Plain-text startup fixtures
+  context_check_sources/  Plain-text source examples
   tests/                  Backend tests
 frontend/
   src/

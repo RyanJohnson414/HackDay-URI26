@@ -26,7 +26,7 @@ export default function App() {
         setBackendState("live");
         setNotice(response.documents.length > 0 && response.documents.every((document) =>
           document.tags.includes("starter-example"))
-          ? "Starter example data is loaded from SQLite. Add your own file, URL, or note to extend the graph."
+          ? "Starter example data is loaded from the local demo files. Add your own file, URL, or note to extend the graph."
           : "");
       }
     } catch (error) {
@@ -113,7 +113,7 @@ export default function App() {
             <div className="how-row"><span className="how-number">02</span><p><b>Discovered connections</b><br />A strong link means two sources share an idea.</p></div>
             <div className="how-row"><span className="how-number">03</span><p><b>Similar topics</b><br />Dashed links show neighboring themes worth exploring.</p></div>
           </section>
-          <div className="privacy-note"><span>↳</span> Your sources are processed by the local backend and stored in its SQLite database.</div>
+          <div className="privacy-note"><span>↳</span> Your source files and graph are stored locally in the backend demo folder.</div>
         </aside>
       </section>
       <footer className="footer"><span>Consilience</span><span>Explore the space between ideas.</span></footer>

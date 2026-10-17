@@ -306,7 +306,7 @@ export default function NetworkView() {
         setBackendConnected(true);
         setNotice(result.documents.length > 0 && result.documents.every((document) =>
           document.tags.includes("starter-example"))
-          ? "Starter example data is loaded from SQLite. Add a source to extend it."
+          ? "Starter example data is loaded from the local demo files. Add a source to extend it."
           : "");
       } else {
         setGraph(result);
@@ -316,7 +316,7 @@ export default function NetworkView() {
     } catch {
       setGraph(emptyGraph);
       setBackendConnected(false);
-      setNotice("Backend is offline. Start the backend to load your SQLite graph.");
+      setNotice("Local demo service is offline. Start the backend to load your graph files.");
     }
   }, []);
 
@@ -448,7 +448,7 @@ export default function NetworkView() {
           });
       setModalOpen(false);
       await refresh();
-      setNotice(`Added "${result.document.title}" to the SQLite graph.`);
+      setNotice(`Added "${result.document.title}" to the local demo graph.`);
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Could not add source.");
     } finally {
@@ -764,7 +764,7 @@ export default function NetworkView() {
             <label>Tags <small>OPTIONAL</small><input name="tags" placeholder="Gemini will add suggested tags" /></label>
           </>}
           {sourceError && <p className="form-error" role="alert">{sourceError}</p>}
-          <div className="modal-footer"><p>Stored in your local SQLite graph.</p>
+          <div className="modal-footer"><p>Stored in the local demo folder.</p>
             <button type="submit" disabled={saving}>{saving ? "READING + ANALYZING..." : "ADD SOURCE ->"}</button></div>
         </form>
       </div>}
