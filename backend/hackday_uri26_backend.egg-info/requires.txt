@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pymupdf
+sqlalchemy
+pydantic-settings
+google-genai
+scikit-learn
+
+[dev]
+pytest
+httpx

@@ -1,0 +1,17 @@
+[project]
+name = "hackday-uri26-backend"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "pymupdf",
+    "sqlalchemy",
+    "pydantic-settings",
+    "google-genai",
+    "scikit-learn",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
